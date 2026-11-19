@@ -7,6 +7,8 @@ from v41_artifacts import ROOT, OUT
 
 
 def build(out):
+    if (ROOT / 'ebsprobe' / 'native_patches.h').exists():
+        raise ValueError('stale ebsprobe/native_patches.h would shadow the generated header')
     if not (out / 'native_patches.h').is_file():
         raise ValueError('run build_native.py with the same --out first')
     flags = ['clang', '--target=aarch64-unknown-windows', '-ffreestanding', '-fno-builtin',

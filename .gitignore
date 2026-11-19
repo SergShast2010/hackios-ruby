@@ -9,3 +9,4 @@ ebsprobe/*.map
 *.img
 *.uefi
 *.gz
+ebsprobe/native_patches.h
