@@ -1,8 +1,0 @@
-{
-  "pass": true,
-  "rebuilt_image_identical": true,
-  "image_sha256": "03222cebb1e928c37d87d3a20f77a7f3cc6ff99fc6271e9ee96ad15c217050e7",
-  "command": "python rebuild.py",
-  "rebuilt_relative_directory": "rebuild-2vwl657r",
-  "source_scope": "fresh root Python/linker sources + ebsprobe (no binaries) + base + qemu-test source; no tests/logs/evidence copied"
-}

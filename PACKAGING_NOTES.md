@@ -1,5 +1,7 @@
 # Handoff / packaging notes
 
+> Historical packaging notes. Use [START_HERE_RU.md](START_HERE_RU.md) for the active v0.41 QEMU-only build.
+
 Implementation and all final tests are complete; no QEMU job is left running. Do not change/rebuild production bytes unnecessarily: tested image SHA-256 is `03222cebb1e928c37d87d3a20f77a7f3cc6ff99fc6271e9ee96ad15c217050e7`.
 
 ## User-facing deliverables ready (not sent by this worker)

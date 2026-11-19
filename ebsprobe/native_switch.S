@@ -3,7 +3,7 @@
  * No EFI scheduler, no IRQ enabling, no direct thread-field writes.
  */
 .section .switch,"ax"
-.global NtSwitchFence,NtSwitchBoot,NtSwitchSecond,NtSwitchResumed
+.global NtSwitchFence,NtSwitchBoot,NtSwitchSecond,NtSwitchResumed,NtSwitchPrepared
 NtSwitchFence:
  b .Lfailure
 NtSwitchBoot:
@@ -49,11 +49,17 @@ NtSwitchResumed:
  ldr x12,[x19,#440]
  cmp x12,#4
  b.ne .Lfailure
- mov x8,#5
- str x8,[x19,#440]
  mov x8,#1
  str x8,[x19,#432]
+ mov x8,#6
+ str x8,[x19,#440]
+ bl NtPreemptArm
+ cbnz w0,.Lprepare_failed
+NtSwitchPrepared:
  mov x0,#0x40
+ b NtExitBody
+.Lprepare_failed:
+ mov x0,#0xe4
  b NtExitBody
 NtSwitchSecond:
  ldr x19,=0xfffffff007e7d800
@@ -86,6 +92,6 @@ NtSwitchSecond:
  mov x1,#0
  mov w2,#0
  bl XnuThreadBlockReason
- b .Lfailure
+ /* This checkpoint never wakes the second thread. */
 .Lfailure:
  b NtPanic

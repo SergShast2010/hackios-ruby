@@ -150,7 +150,7 @@ __attribute__((noinline,noreturn)) void PostPhysical(struct context *c) {
  __asm__ volatile("dsb sy\nisb":::"memory");
  if(!NtSnapshot()){
   for(unsigned row=4;row<40;row++)RawLine(row,"",WHITE);
-  RawLine(0,"ruby v0.40 - native switch snapshot",YELLOW);
+   RawLine(0,"ruby v0.41 - QEMU snapshot",YELLOW);
   RawLine(4,"NATIVE SNAPSHOT REJECTED - send photo",RED);
   hexline(5,"Failure mask=",nt_snapshot.failed,WHITE);
   hexline(6,"Input guard=",nt_snapshot.input,WHITE);
@@ -196,13 +196,14 @@ static int map_valid(const unsigned char *map,uint64_t n,uint64_t ds,uint32_t dv
 }
 __attribute__((noinline)) efi_status efi_main(efi_handle image,efi_system_table *st) {
  efi_gop *gop=0;efi_boot_services *bs;efi_status s;uint64_t el;
+ if(NtTestProfile!=NT_QEMU_PROFILE)return ERR(26);
  screen=0;physical=0;if(!st||!st->bs)return ERR(2);bs=st->bs;
  s=bs->locate_protocol(&gop_guid,0,(void **)&gop);
  if(EFI_ERROR(s)||!gop||!gop->mode||!gop->mode->info)return ERR(14);
  efi_gop_mode *m=gop->mode;efi_gop_mode_info *info=m->info;
  if(m->fb_base!=FB||m->fb_size<1080ULL*2400*4||info->width!=1080||info->height!=2400||info->pixels_per_scanline!=1080)return ERR(26);
  screen=(volatile uint32_t *)(uintptr_t)FB;
- RawLine(0,"ruby v0.40 - native switch entry",GREEN);
+ RawLine(0,"ruby v0.41 - QEMU only",GREEN);
  RawLine(1,"No UFS / USB / disk writes",YELLOW);
  __asm__ volatile("mrs %0,CurrentEL":"=r"(el));if(el!=4){RawLine(4,"Requires current EL1",YELLOW);return ERR(3);}
  struct ruby_ram_policy_report policy;
@@ -278,14 +279,19 @@ __attribute__((noinline,noreturn)) void CheckpointOrFault(struct context *c) {
  {
  volatile uint32_t *out=(void *)(uintptr_t)screen;for(uint64_t i=0;i<UINT64_C(1080)*2400;i++)out[i]=UINT32_C(0xff000000);
  NativeState*s=nt_state;uint64_t sc=NTR(sctlr_el1),vb=NTR(vbar_el1);
- int ok=s->magic==UINT64_C(0x394e415449564553)&&s->reason==0x40&&s->switch_pass&&s->phase==5&&s->boot_after==s->boot_before&&s->second&&s->second!=s->boot_before&&s->gic_ready&&s->restored&&!s->restore_error&&!(sc&0x1005)&&vb==(uint64_t)(uintptr_t)OwnVectors;
- RawLine(0,"ruby v0.40 - native cooperative switch",ok?GREEN:RED);
- RawLine(4,ok?"NATIVE BOOT - SECOND - BOOT: RESUMED":"NATIVE COOPERATIVE SWITCH FAILED",ok?GREEN:RED);
+  int ok=s->magic==UINT64_C(0x394e415449564553)&&s->reason==0x40&&s->switch_pass&&s->phase==6&&!s->preempt_count&&s->preempt_phase==3&&!s->preempt_error&&s->boot_after==s->boot_before&&s->second&&s->second!=s->boot_before&&s->gic_ready&&s->restored&&!s->restore_error&&!(sc&0x1005)&&vb==(uint64_t)(uintptr_t)OwnVectors;
+  RawLine(0,"ruby v0.41 - QEMU only",ok?GREEN:RED);
+  RawLine(4,ok?"IRQ PREPARATION: PASS":"IRQ PREPARATION: FAILED",ok?GREEN:RED);
  hexline(6,"Native reason=",s->reason,WHITE);hexline(7,"Kernel thread=",s->thread,WHITE);hexline(8,"Native stack=",s->native_sp,WHITE);hexline(9,"GIC bound=",s->gic_ready,WHITE);hexline(10,"Hardware restored=",s->restored,WHITE);hexline(11,"Restore error=",s->restore_error,WHITE);hexline(12,"Return SCTLR=",sc,WHITE);hexline(13,"Kernel SCTLR=",s->native_sctlr,WHITE);
  hexline(14,"Inherited RPR=",s->rpr,WHITE);hexline(15,"Inherited PMR=",s->pmr,WHITE);
-  hexline(19,"Boot before=",s->boot_before,WHITE);hexline(20,"Second thread=",s->second,WHITE);hexline(21,"Second stack=",s->second_sp,WHITE);hexline(22,"Boot resumed=",s->boot_after,WHITE);hexline(23,"Switch pass=",s->switch_pass,WHITE);hexline(24,"Phase=",s->phase,WHITE);
-  RawLine(16,"IRQ masked; NOT periodic scheduling",WHITE);
- RawLine(18,"No IOKit/PSCI/storage; manual reboot",WHITE);
+ hexline(17,"Preempt IRQ IAR=",s->preempt_iar,WHITE);hexline(18,"Preempt ELR=",s->preempt_elr,WHITE);hexline(19,"Preempt count=",s->preempt_count,WHITE);hexline(20,"Preempt phase=",s->preempt_phase,WHITE);hexline(21,"Preempt error=",s->preempt_error,WHITE);
+ hexline(23,"Boot before=",s->boot_before,WHITE);hexline(24,"Second thread=",s->second,WHITE);hexline(25,"Second stack=",s->second_sp,WHITE);hexline(26,"Boot resumed=",s->boot_after,WHITE);hexline(27,"Switch pass=",s->switch_pass,WHITE);hexline(28,"Phase=",s->phase,WHITE);
+  RawLine(30,"IRQ masked; no timer IRQ or preemption",WHITE);
+  RawLine(32,"Do not flash this image",WHITE);
+  if(!ok&&s->reason==0xef){
+   hexline(34,"Panic LR=",s->panic_lr,WHITE);hexline(35,"Last ESR (may be stale)=",s->last_esr,WHITE);
+   hexline(36,"Last ELR (may be stale)=",s->last_elr,WHITE);
+  }
  NativeTerminalDone();
  }
  uint64_t sctlr,vbar,el;__asm__ volatile("mrs %0,sctlr_el1":"=r"(sctlr));__asm__ volatile("mrs %0,vbar_el1":"=r"(vbar));__asm__ volatile("mrs %0,CurrentEL":"=r"(el));

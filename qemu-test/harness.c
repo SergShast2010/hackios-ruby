@@ -49,7 +49,7 @@ static void execute(unsigned cpu,void*user){
  (void)cpu;struct inst*i=user;
  if(i->pc==0xfffffff007453e28ULL&&i->word==0x14000000U&&++fence_count>2)return;
  if(i->pc>=callback+0xcc&&i->pc<callback+0x140){if((i->word&0xffffffe0U)==0xd5087e40U)clean_count++;return;}
- if(!i->selected&&!(i->pc>=0xfffffff007472368ULL&&i->pc<0xfffffff00747297cULL))return;
+ if(!i->selected&&!(i->pc>=0xfffffff007472368ULL&&i->pc<0xfffffff007472f98ULL))return;
  fprintf(audit,"I %016"PRIx64" %08x",i->pc,i->word);
  if(i->selected){for(unsigned n=0;n<G_N_ELEMENTS(names);n++)if(handles[n]){g_byte_array_set_size(buf,0);if(qemu_plugin_read_register(handles[n],buf)>0&&buf->len<=8){uint64_t v=0;for(unsigned j=0;j<buf->len;j++)v|=(uint64_t)buf->data[j]<<(j*8);fprintf(audit," %s=%016"PRIx64,names[n],v);}}}
  fputc('\n',audit);

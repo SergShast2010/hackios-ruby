@@ -1,5 +1,7 @@
 # v40 native switch — implementation status
 
+> Historical v0.40 report, retained unchanged below. See [HANDOFF_V41.md](HANDOFF_V41.md) for active v0.41 work and [PHONE_EVIDENCE.md](PHONE_EVIDENCE.md) for later device observations.
+
 ## COMPLETE — final production bytes tested
 
 Final image: `Mu-ruby-v0.40-native-switch.img`

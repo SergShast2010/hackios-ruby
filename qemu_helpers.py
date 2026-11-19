@@ -87,12 +87,8 @@ def final_app(image):
         used = struct.unpack_from('<I', fat)[0] + 8
         assert 8 <= used <= len(fat)
         assert fat[used:] == bytes(len(fat) - used)
-        packed_path = image.parent / 'qemu-packed.uefi'
-        decoded_path = image.parent / 'qemu-decoded.img'
-        packed_path.write_bytes(fat[:used])
         import EfiCompressor
         fat = EfiCompressor.UefiDecompress(fat[:used], used)
-        decoded_path.write_bytes(fat)
         assert len(fat) == 0x1000000
 
     fd = gzip.decompress(kernel)[-0x200000:]
@@ -293,6 +289,7 @@ class QMP:
         for _ in range(200):
             try:
                 self.sock = socket.socket(socket.AF_UNIX)
+                self.sock.settimeout(10)
                 self.sock.connect(str(path))
                 break
             except OSError:
@@ -325,13 +322,26 @@ class RSP:
         self.sock.connect(str(path))
         self.writes = []
 
-    def command(self, command):
+    def command(self, command, timeout=None):
+        previous = self.sock.gettimeout()
+        if timeout is not None:
+            self.sock.settimeout(timeout)
+        try:
+            return self._command(command)
+        finally:
+            self.sock.settimeout(previous)
+
+    def _command(self, command):
         body = command.encode()
         if command.startswith(('M', 'P', 'G', 'Z', 'z')):
             self.writes.append(command)
         self.sock.sendall(b'$' + body + b'#' + f'{sum(body) % 256:02x}'.encode())
-        while self.sock.recv(1) != b'$':
-            pass
+        while True:
+            ch = self.sock.recv(1)
+            if not ch:
+                raise RuntimeError('GDB disconnected before packet')
+            if ch == b'$':
+                break
         data = bytearray()
         while True:
             ch = self.sock.recv(1)

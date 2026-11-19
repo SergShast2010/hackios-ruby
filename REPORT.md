@@ -1,5 +1,7 @@
 # ruby v0.40 — real native XNU cooperative context switch
 
+> Historical v0.40 report, not v0.41 evidence. See [HANDOFF_V41.md](HANDOFF_V41.md) and [PHONE_EVIDENCE.md](PHONE_EVIDENCE.md).
+
 ## Result
 
 **Implemented and QEMU-verified on the exact final production image:** original native boot kernel thread → a genuinely created native XNU diagnostic kernel thread → the original boot thread, resumed on its original native stack.

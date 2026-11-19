@@ -1,0 +1,51 @@
+{
+  "version": "0.40-native-switch",
+  "milestone": "native XNU cooperative boot-to-second-to-boot context switch",
+  "image": "Mu-ruby-v0.40-native-switch.img",
+  "image_sha256": "03222cebb1e928c37d87d3a20f77a7f3cc6ff99fc6271e9ee96ad15c217050e7",
+  "app_sha256": "86d9dc82107ee97d45137176a8fb9aba832be5e00ecfc0c86834dc8fb6f67ff9",
+  "payload_container_sha256": "cdbfddb34ed5f3a90b606c4b178f67e40c80bd4ea37831e6609a9eabd36e9b0c",
+  "original_macho_sha256": "9239d4adb7a2c433d7ed5729b47b63acc5281af73d8a81640ef3c678c8afd26c",
+  "qemu_tests_passed": 9,
+  "qemu_positive_roundtrips": 6,
+  "native_switch_calls_total": {
+    "thread_invoke": 2,
+    "machine_switch_context": 2,
+    "Switch_context": 2
+  },
+  "primary_inherited": {
+    "pmr": "0xf0",
+    "rpr": "0xff"
+  },
+  "primary_observed": {
+    "boot_before": "0xfffffff5035e8ee0",
+    "boot_sp_before": "0xfffffff7d4c3bf30",
+    "second": "0xfffffff5035e6dc0",
+    "second_sp": "0xfffffff7d4c4bf30",
+    "boot_after": "0xfffffff5035e8ee0",
+    "boot_sp_after": "0xfffffff7d4c3bf30",
+    "second_daif": "0x3c0",
+    "boot_daif_after": "0x3c0",
+    "phase": "0x5",
+    "switch_pass": "0x1",
+    "reason": "0x40",
+    "restored": "0x1",
+    "restore_error": "0x0"
+  },
+  "original_kernel_unchanged": true,
+  "patch_old_bytes_checked": true,
+  "native_switch_bodies_unmodified": true,
+  "observer_fixture_release_only": true,
+  "observer_rebuild_identical": true,
+  "clean_image_rebuild_identical": true,
+  "phone_tested": false,
+  "preemption": false,
+  "full_scheduler_startup": false,
+  "limitations": [
+    "IRQ remains masked; Group1 remains closed",
+    "diagnostic second thread is left waiting; no thread cleanup",
+    "no IOKit/PSCI/storage/PMIC/new MMIO/SMC/HVC",
+    "phone execution and real hardware switch are unverified"
+  ],
+  "evidence": "verification/final-proof.json + tests/44000000-inherited-3/result.json + REPORT.md"
+}

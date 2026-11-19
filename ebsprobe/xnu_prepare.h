@@ -24,6 +24,7 @@ static uint32_t PayloadCrc(const unsigned char *p,uint64_t n){uint32_t c=UINT32_
 __attribute__((noinline)) efi_status PrepareXnu(efi_handle image,efi_boot_services *bs,struct context *c) {
  XnuLoaded *li=0;XnuFs *fs=0;XnuFile *root=0,*file=0;efi_status s;uint64_t source=RUBY_STAGE_SOURCE_BASE,dest=RUBY_STAGE_DEST_BASE;
  int source_owned=0,dest_owned=0;
+ if(!NtInputGuard(c->frequency))return ERR(26);
  s=bs->handle_protocol(image,&xnu_loaded,(void **)&li);if(EFI_ERROR(s)||!li||!li->device)return EFI_ERROR(s)?s:ERR(26);
  s=bs->handle_protocol(li->device,&xnu_fs,(void **)&fs);if(EFI_ERROR(s)||!fs||!fs->open_volume)return EFI_ERROR(s)?s:ERR(26);
  s=fs->open_volume(fs,&root);if(EFI_ERROR(s)||!root)return EFI_ERROR(s)?s:ERR(26);
@@ -31,7 +32,6 @@ __attribute__((noinline)) efi_status PrepareXnu(efi_handle image,efi_boot_servic
  s=root->open(root,&file,path,1,0);if(EFI_ERROR(s)||!file){if(!EFI_ERROR(s))s=ERR(26);goto done;}
  s=bs->allocate_pages(AllocateAddress,EfiLoaderData,RUBY_STAGE_SOURCE_MAX>>12,&source);if(EFI_ERROR(s))goto done;source_owned=1;if(source!=RUBY_STAGE_SOURCE_BASE){s=ERR(26);goto done;}
  uint64_t n=RUBY_STAGE_SOURCE_MAX;s=file->read(file,&n,(void *)(uintptr_t)source);if(EFI_ERROR(s))goto done;
- if(!NtInputGuard(c->frequency)){s=ERR(26);goto done;}
  if(n!=CHECKPOINT_PAYLOAD_BYTES||PayloadCrc((const unsigned char *)(uintptr_t)source,n)!=CHECKPOINT_PAYLOAD_CRC||!NtHash((const unsigned char *)(uintptr_t)source,n,nt_payload_hash)){s=ERR(26);goto done;}
  unsigned char extra;uint64_t one=1;s=file->read(file,&one,&extra);if(EFI_ERROR(s)||one){s=ERR(26);goto done;}
  s=file->close(file);file=0;if(EFI_ERROR(s))goto done;s=root->close(root);root=0;if(EFI_ERROR(s))goto done;

@@ -1,88 +1,88 @@
 {
   "version": "0.38b",
-  "base_sha256": "ccf5e56b8221b6c79d7e277ed2e78d231098b5c60084bf0f5315ed4adfd39637",
-  "image_sha256": "03222cebb1e928c37d87d3a20f77a7f3cc6ff99fc6271e9ee96ad15c217050e7",
+  "base_sha256": "773dd3f7ba58e482f183c6154fd1626e38c06a76ec48f4948eebf6a9aa822b1c",
+  "image_sha256": "598d2d47bbcdb9fe2a5668b239d13e9f9206738aa72da01db4b7e3d83f9a5ba0",
   "image_bytes": 6883328,
-  "app_sha256": "86d9dc82107ee97d45137176a8fb9aba832be5e00ecfc0c86834dc8fb6f67ff9",
-  "app_bytes": 70656,
-  "old_app_bytes": 66048,
+  "app_sha256": "9f50f7f3a00ece6ea519d58a819de6bdd793360c926c87594f67ea489b969402",
+  "app_bytes": 72704,
+  "old_app_bytes": 43008,
   "byte_identical_to_base": false,
   "fd_bytes": 2097152,
-  "decoded_fv_bytes": 2637824,
-  "lzma_uncompressed_bytes": 2637832,
+  "decoded_fv_bytes": 2641920,
+  "lzma_uncompressed_bytes": 2641928,
   "packed_bytes": 6291456,
-  "packed_used": 6210079,
-  "packed_crc": "0xfc78a8fb",
+  "packed_used": 6211357,
+  "packed_crc": "0xc4d4599",
   "fat_bytes": 16777216,
-  "fat_crc": "0x2894961e",
+  "fat_crc": "0xdefb3816",
   "payload_sha256": "cdbfddb34ed5f3a90b606c4b178f67e40c80bd4ea37831e6609a9eabd36e9b0c",
   "payload_bytes": 15623112,
   "shim_sha256": "d2cefd0edfa2d14bc7a42c01605d52c1d7ef7c17e47e095badb01c8256c12d39",
   "dtb_sha256": "9ca3c894776665ae454831848d73a8bfa82b27b8ae3fc609142e946ff3098701",
-  "BDS_sha256": "a25f2b37ea9e64a9248c17538d52a40045e72978f27bc9068e75bda081278e8a",
+  "BDS_sha256": "46264b94a9127c5714a90234442ec9468f326d283fff240d3864ec6ad2f30504",
   "BDS_patches": [
     {
       "rva": "0x1500c",
       "file_offset": 82956,
-      "old_word": "0x5281f8b6",
-      "new_word": "0x52951f76",
-      "new_immediate": 43259
+      "old_word": "0x52930f76",
+      "new_word": "0x5288b336",
+      "new_immediate": 17817
     },
     {
       "rva": "0x1501c",
       "file_offset": 82972,
-      "old_word": "0x72a459d6",
-      "new_word": "0x72bf8f16",
-      "new_immediate": 64632
+      "old_word": "0x72b2ec16",
+      "new_word": "0x72a189b6",
+      "new_immediate": 3149
     },
     {
       "rva": "0x1525c",
       "file_offset": 83548,
-      "old_word": "0x5281f8a4",
-      "new_word": "0x52951f64",
-      "new_immediate": 43259
+      "old_word": "0x52930f64",
+      "new_word": "0x5288b324",
+      "new_immediate": 17817
     },
     {
       "rva": "0x15270",
       "file_offset": 83568,
-      "old_word": "0x72a459c4",
-      "new_word": "0x72bf8f04",
-      "new_immediate": 64632
+      "old_word": "0x72b2ec04",
+      "new_word": "0x72a189a4",
+      "new_immediate": 3149
     },
     {
       "rva": "0x15ac8",
       "file_offset": 85704,
-      "old_word": "0x52964b75",
-      "new_word": "0x5292c3d5",
-      "new_immediate": 38430
+      "old_word": "0x528f26d5",
+      "new_word": "0x528702d5",
+      "new_immediate": 14358
     },
     {
       "rva": "0x15ad4",
       "file_offset": 85716,
-      "old_word": "0x72a32555",
-      "new_word": "0x72a51295",
-      "new_immediate": 10388
+      "old_word": "0x72bd0f15",
+      "new_word": "0x72bbdf75",
+      "new_immediate": 57083
     },
     {
       "rva": "0x15f4c",
       "file_offset": 86860,
-      "old_word": "0x52964b64",
-      "new_word": "0x5292c3c4",
-      "new_immediate": 38430
+      "old_word": "0x528f26c4",
+      "new_word": "0x528702c4",
+      "new_immediate": 14358
     },
     {
       "rva": "0x15f64",
       "file_offset": 86884,
-      "old_word": "0x72a32544",
-      "new_word": "0x72a51284",
-      "new_immediate": 10388
+      "old_word": "0x72bd0f04",
+      "new_word": "0x72bbdf64",
+      "new_immediate": 57083
     },
     {
       "rva": "0x17914",
       "file_offset": 93460,
-      "old_word": "0x5296f708",
-      "new_word": "0x529842e8",
-      "new_immediate": 49687
+      "old_word": "0x5291ff28",
+      "new_word": "0x5298e2a8",
+      "new_immediate": 50965
     },
     {
       "rva": "0x17918",
@@ -95,12 +95,11 @@
   "BDS_chunk_table_offset": 99536,
   "BDS_change_scope": "only ten pinned MOV immediate fields and 16 CRC32 words",
   "fat_allocation": {
-    "old_clusters": 129,
-    "new_clusters": 138,
-    "added_clusters": 9,
-    "free_clusters_after": 1825
+    "old_clusters": 84,
+    "new_clusters": 142,
+    "added_clusters": 58,
+    "free_clusters_after": 1821
   },
   "on_device_tested": false,
-  "verification": "run independent verify_packaging.py; build metadata is not proof",
-  "base_image_sha256": "ccf5e56b8221b6c79d7e277ed2e78d231098b5c60084bf0f5315ed4adfd39637"
+  "verification": "run independent verify_packaging.py; build metadata is not proof"
 }

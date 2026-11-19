@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
-"""Linux host only. Rebuild in a fresh directory; never flash or replace inputs."""
+"""Repeat the v0.41 build in a fresh directory and compare the output bytes."""
+import argparse
 from pathlib import Path
-import hashlib,shutil,subprocess,sys,tempfile
-H=Path(__file__).resolve().parent
-D=Path(tempfile.mkdtemp(prefix='rebuild-',dir=H))
-for name in ['ebsprobe','base','qemu-test']:
-    shutil.copytree(H/name,D/name,ignore=shutil.ignore_patterns('*.o','*.obj','*.elf','*.efi','*.map','out','__pycache__','*.so'))
-for p in H.glob('*.py'):shutil.copy2(p,D/p.name)
-for p in H.glob('*.ld'):shutil.copy2(p,D/p.name)
-subprocess.run([sys.executable,str(D/'build_release.py'),str(D/'base/Mu-ruby-v0.38b-gicgate.img')],cwd=D,check=True)
-name='Mu-ruby-v0.40-native-switch.img'
-expected=hashlib.sha256((H/name).read_bytes()).hexdigest()
-got=hashlib.sha256((D/name).read_bytes()).hexdigest()
-assert got==expected,'Rebuilt image differs'
-print('BYTE-IDENTICAL',got)
-print('New output directory:',D)
+from tempfile import TemporaryDirectory
+
+from build_release import build
+from v41_artifacts import IMAGE, OUT, sha
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--reference', type=Path, default=OUT)
+args = parser.parse_args()
+names = (IMAGE, 'loader.efi', 'runtime_manifest.json', 'native_patches.h')
+reference = {name: sha((args.reference / name).read_bytes()) for name in names}
+with TemporaryDirectory(prefix='ruby-v41-rebuild-') as directory:
+    root = Path(directory)
+    build(root)
+    for name in names:
+        if sha((root / name).read_bytes()) != reference[name]:
+            raise SystemExit(f'rebuild differs: {name}')
+print('BYTE-IDENTICAL', reference[IMAGE])

@@ -1,10 +1,30 @@
 #!/usr/bin/env python3
+import argparse
 from pathlib import Path
 import subprocess
-H=Path(__file__).resolve().parent
-p=H/'ebsprobe'
-flags=['clang','--target=aarch64-unknown-windows','-ffreestanding','-fno-builtin','-fno-stack-protector','-fshort-wchar','-mgeneral-regs-only','-mstrict-align','-O1','-Wall','-Wextra','-Werror','-Wno-unused-parameter']
-for source in ['loader.c','transition.S','irq_vectors.S']:
- subprocess.run(flags+['-c',str(p/source),'-o',str(p/(source+'.obj'))],check=True)
-subprocess.run(['lld-link','/subsystem:efi_application','/entry:efi_main','/nodefaultlib','/machine:arm64','/base:0xa1000000','/dynamicbase','/timestamp:0x6af4c4de','/filealign:512','/map:'+str(p/'loader.map'),'/out:'+str(p/'loader.efi'),str(p/'loader.c.obj'),str(p/'transition.S.obj'),str(p/'irq_vectors.S.obj')],check=True)
-print('BUILT',p/'loader.efi',(p/'loader.efi').stat().st_size)
+
+from v41_artifacts import ROOT, OUT
+
+
+def build(out):
+    if not (out / 'native_patches.h').is_file():
+        raise ValueError('run build_native.py with the same --out first')
+    flags = ['clang', '--target=aarch64-unknown-windows', '-ffreestanding', '-fno-builtin',
+             '-fno-stack-protector', '-fshort-wchar', '-mgeneral-regs-only', '-mstrict-align',
+             '-O1', '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter', '-I', str(out)]
+    objects = []
+    for name in ('loader.c', 'transition.S', 'irq_vectors.S'):
+        obj = out / (name + '.obj')
+        subprocess.run([*flags, '-c', ROOT / 'ebsprobe' / name, '-o', obj], check=True)
+        objects.append(obj)
+    app = out / 'loader.efi'
+    subprocess.run(['lld-link', '/subsystem:efi_application', '/entry:efi_main', '/nodefaultlib',
+                    '/machine:arm64', '/base:0xa1000000', '/dynamicbase', '/timestamp:0x6af4c4de',
+                    '/filealign:512', f'/map:{out / "loader.map"}', f'/out:{app}', *objects], check=True)
+    return app.read_bytes()
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Build v0.41 EFI loader with the generated patch header')
+    parser.add_argument('--out', type=Path, default=OUT)
+    build(parser.parse_args().out)

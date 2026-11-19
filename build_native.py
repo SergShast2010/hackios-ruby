@@ -1,64 +1,157 @@
 #!/usr/bin/env python3
+import argparse
+import json
+import struct
+import subprocess
 from pathlib import Path
-import subprocess,json,struct,hashlib,sys
-H=Path(__file__).resolve().parent;P=H/'ebsprobe';B=H
-sys.path.insert(0,str(B));import qemu_helpers as q
+
 from fat_reader import fat_path
-image=Path(sys.argv[1]) if len(sys.argv)>1 else H/'base/Mu-ruby-v0.38b-gicgate.img';assert q.sha(image.read_bytes())=='ccf5e56b8221b6c79d7e277ed2e78d231098b5c60084bf0f5315ed4adfd39637'
-_,fat=q.final_app(image);payload=fat_path(fat,[b'PAYLOAD XNP']);k,segs,syms,entry=q.kernel_metadata(payload)
-assert q.sha(k)=='9239d4adb7a2c433d7ed5729b47b63acc5281af73d8a81640ef3c678c8afd26c'
-base=0xfffffff007472368;end=0xfffffff007472bf0
-flags=['clang','--target=aarch64-none-elf','-ffreestanding','-fno-builtin','-fno-stack-protector','-mgeneral-regs-only','-mstrict-align','-Oz','-Wall','-Wextra','-Werror','-fno-pic','-fno-unwind-tables','-fno-asynchronous-unwind-tables']
-for src in ['native_quiet.c','native_bridge.S','native_switch.S']:subprocess.run(flags+['-c',str(P/src),'-o',str(P/(src+'.o'))],check=True)
-subprocess.run(['ld.lld','-T',str(H/'native.ld'),str(P/'native_bridge.S.o'),str(P/'native_quiet.c.o'),str(P/'native_switch.S.o'),'-o',str(P/'native_bridge.elf')],check=True)
-subprocess.run(['aarch64-linux-gnu-objcopy','-O','binary','--only-section=.text',str(P/'native_bridge.elf'),str(P/'native_bridge.bin')],check=True)
-subprocess.run(['aarch64-linux-gnu-objcopy','-O','binary','--only-section=.switch',str(P/'native_bridge.elf'),str(P/'native_switch.bin')],check=True)
-blob=(P/'native_bridge.bin').read_bytes();print('native cave bytes',len(blob),'capacity',end-base);assert len(blob)<=end-base
-nm=subprocess.check_output(['aarch64-linux-gnu-nm','-n',str(P/'native_bridge.elf')],text=True);symbols={l.split()[2]:int(l.split()[0],16) for l in nm.splitlines() if len(l.split())==3}
-def old(va,n):
- s=next(s for s in segs if s['va']<=va and va+n<=s['va']+s['files']);return k[s['off']+va-s['va']:s['off']+va-s['va']+n]
-def branch(va,target):
- delta=target-va;assert delta%4==0 and -(1<<27)<=delta<(1<<27);return struct.pack('<I',0x14000000|((delta>>2)&0x3ffffff))
-assert symbols['NtPanic']==base,'ELF/file cave alignment mismatch'
-assert base+len(blob)<=syms['_loader_jump'],'leave legacy jump entry separately fenceable'
-switch_base=syms['_loader_jump']+4;switch_end=end
-switch_blob=(P/'native_switch.bin').read_bytes()
-assert switch_base==0xfffffff0074729f0 and switch_end==0xfffffff007472bf0
-assert symbols['NtSwitchFence']==switch_base and len(switch_blob)<=switch_end-switch_base
-original_switch_cave=old(switch_base,switch_end-switch_base)
-assert q.sha(original_switch_cave)=='6a817a0498bcb501e24c578cfd41cec168a6a2c4f7a396657ffdfeec203d26d3' # exact original 512-byte tail
-print('fenced legacy loader_jump tail',len(switch_blob),'capacity',switch_end-switch_base,'original SHA256',q.sha(original_switch_cave))
-switch_blob+=struct.pack('<I',0x14000000)*((switch_end-switch_base-len(switch_blob))//4)
-assert len(switch_blob)==switch_end-switch_base
-patches=[(base,blob,'read-only quiet GIC binding + RAM-only exit cave'),(switch_base,switch_blob,'bounded switch in original fenced legacy loader_jump tail')]
-def adrp_add(va,target,reg=0):
- d=(target>>12)-(va>>12);assert -(1<<20)<=d<(1<<20);u=d&0x1fffff
- return struct.pack('<II',0x90000000|((u&3)<<29)|((u>>2)<<5)|reg,0x91000000|((target&4095)<<10)|(reg<<5)|reg)
-patches += [(0xfffffff007309b10,adrp_add(0xfffffff007309b10,symbols['NtSwitchSecond']),'bounded sched_startup native kernel thread continuation'),(0xfffffff007309b64,branch(0xfffffff007309b64,0xfffffff007309b98),'bounded sched_startup return before powered-core service thread'),(0xfffffff007305b00,struct.pack('<I',0x52800003),'diagnostic continuation IRQ masked; enable_interrupts=false')]
-for name in ['_loader_return','_loader_jump']:patches.append((syms[name],branch(syms[name],symbols['NtPanic']),'independent legacy entry fence '+name))
-for name in ['_PE_init_iokit','_hv_wdt_pet','_loader_return_timer','_loader_stop_poll']:
- if name in syms:patches.append((syms[name],branch(syms[name],symbols['NtPanic']),'independent forbidden-path fence '+name))
-# Fence every SMC/HVC opcode in executable native text, even on failure paths.
-for sg in segs:
- if sg['name']!='__TEXT_EXEC':continue
- for off in range(sg['off'],sg['off']+sg['files']-3,4):
-  w=struct.unpack_from('<I',k,off)[0];va=sg['va']+off-sg['off']
-  if w&0xffe0001f in [0xd4000002,0xd4000003]:patches.append((va,branch(va,symbols['NtPanic']),'firmware instruction fail fence'))
-for name,va,target in [('native timer sysreg fix',0xfffffff007a564a8,0xfffffff007a565bc),('GIC hardware tail replacement',0xfffffff00747487c,symbols['NtGicEntry']),('first native thread entry stop',syms['_kernel_bootstrap_thread'],symbols['NtFirstThread']),('panic terminal RAM exit',syms['_panic'],symbols['NtPanic'])]:patches.append((va,branch(va,target),name))
-# Original loader_jump lives inside replaced cave; all legacy return entrypoints
-# are unreachable in successful path. Early vector/error gets a direct own stop.
-for seg in segs:
- if seg['name']!='__TEXT_EXEC':continue
- for off in range(seg['off'],seg['off']+seg['files']-3,4):
-  va=seg['va']+off-seg['off'];w=struct.unpack_from('<I',k,off)[0]
-  if base<=va<end or w&0x7c000000!=0x14000000:continue
-  imm=w&0x3ffffff;imm=imm-(1<<26) if imm&(1<<25) else imm
-  if va+4*imm in [syms['_loader_jump'],syms['_loader_return']]:patches.append((va,branch(va,symbols['NtPanic']),'legacy return call rerouted own RAM stop'))
-rows=[];hdr=['/* GENERATED by build_native.py; all writes are staged-RAM only. */','static const unsigned char nt_payload_hash[]={'+','.join('0x%02x'%b for b in hashlib.sha256(payload).digest())+'};']
-for i,(va,new,name) in enumerate(patches):
- o=old(va,len(new));rows.append(dict(name=name,va=hex(va),pa=hex(0x63000000+va-0xfffffff007000000),old=o.hex(),new=new.hex()))
- for label,data in [('old',o),('new',new)]:hdr.append('static const unsigned char nt_%s_%d[]={%s};'%(label,i,','.join('0x%02x'%b for b in data)))
-hdr.append('typedef struct { uint64_t pa,n;const unsigned char *old,*newbytes;} NtPatch;')
-hdr.append('static const NtPatch nt_patches[]={'+','.join('{UINT64_C(%s),%d,nt_old_%d,nt_new_%d}'%(r['pa'],len(bytes.fromhex(r['new'])),i,i) for i,r in enumerate(rows))+'};')
-(P/'native_patches.h').write_text('\n'.join(hdr)+'\n')
-(H/'runtime_manifest.json').write_text(json.dumps(dict(input_image_sha256=q.sha(image.read_bytes()),kernel_sha256=q.sha(k),payload_sha256=q.sha(payload),bridge_symbols={n:hex(v) for n,v in symbols.items()},patches=rows),indent=2)+'\n')
+import qemu_helpers as q
+from v41_artifacts import (ROOT, OUT, KERNEL_BASE, KERNEL_BASE_SHA, KERNEL_SHA, LINK, STAGE,
+                           check_patches, check_ranges, covered_by, firmware_instruction, sha)
+
+
+def branch(va, target):
+    delta = target - va
+    if delta % 4 or not -(1 << 27) <= delta < (1 << 27):
+        raise ValueError(f'branch out of range: {va:#x} -> {target:#x}')
+    return struct.pack('<I', 0x14000000 | ((delta >> 2) & 0x3ffffff))
+
+
+def adrp_add(va, target):
+    delta = (target >> 12) - (va >> 12)
+    if not -(1 << 20) <= delta < (1 << 20):
+        raise ValueError('ADRP out of range')
+    imm = delta & 0x1fffff
+    return struct.pack('<II', 0x90000000 | ((imm & 3) << 29) | ((imm >> 2) << 5),
+                       0x91000000 | ((target & 4095) << 10))
+
+
+def build(image, out):
+    image_sha = sha(image.read_bytes())
+    if image_sha != KERNEL_BASE_SHA:
+        raise ValueError('native input must be the pinned v0.38b image')
+    _, fat = q.final_app(image)
+    payload = fat_path(fat, [b'PAYLOAD XNP'])
+    kernel, segments, syms, _ = q.kernel_metadata(payload)
+    if sha(kernel) != KERNEL_SHA:
+        raise ValueError('unexpected Mach-O')
+
+    out.mkdir(parents=True, exist_ok=True)
+    elf = out / 'native_bridge.elf'
+    flags = ['clang', '--target=aarch64-none-elf', '-ffreestanding', '-fno-builtin',
+             '-fno-stack-protector', '-mgeneral-regs-only', '-ffixed-x18', '-mstrict-align',
+             '-Oz', '-Wall', '-Wextra', '-Werror', '-fno-pic', '-fno-unwind-tables',
+             '-fno-asynchronous-unwind-tables']
+    objects = []
+    for src in ('native_quiet.c', 'native_bridge.S', 'native_switch.S'):
+        obj = out / (src + '.o')
+        subprocess.run([*flags, '-c', ROOT / 'ebsprobe' / src, '-o', obj], check=True)
+        objects.append(obj)
+    subprocess.run(['ld.lld', '-T', ROOT / 'native.ld', *objects, '-o', elf], check=True)
+    nm = subprocess.check_output(['aarch64-linux-gnu-nm', '-n', elf], text=True)
+    symbols = {name: int(va, 16) for va, _, name in (s.split() for s in nm.splitlines() if len(s.split()) == 3)}
+
+    def original(va, length):
+        seg = next((s for s in segments if s['name'] == '__TEXT_EXEC'
+                    and s['va'] <= va < va + length <= s['va'] + s['files']), None)
+        if seg is None:
+            raise ValueError(f'bytes outside file-backed executable text at {va:#x}')
+        off = seg['off'] + va - seg['va']
+        return kernel[off:off + length]
+
+    patches = []
+    occupied = []
+    sections = {}
+    for name in ('text', 'switch', 'extra'):
+        start, end = (symbols[f'__nt_{name}_{key}'] for key in ('start', 'end'))
+        limit = syms['_loader_jump'] if name == 'text' else symbols[f'__nt_{name}_limit']
+        binary = out / f'native_{name}.bin'
+        subprocess.run(['aarch64-linux-gnu-objcopy', '-O', 'binary', f'--only-section=.{name}',
+                        elf, binary], check=True)
+        data = binary.read_bytes()
+        if len(data) != end - start or not start < end <= limit or (start | end | limit) & 3:
+            raise ValueError(f'invalid ELF layout for .{name}')
+        if any(firmware_instruction(w) for w, in struct.iter_unpack('<I', data)):
+            raise ValueError(f'unexpected SMC/HVC opcode in generated .{name}')
+        if name == 'switch' and sha(original(start, limit - start)) != '6a817a0498bcb501e24c578cfd41cec168a6a2c4f7a396657ffdfeec203d26d3':
+            raise ValueError('original .switch tail does not match')
+        written = end if name == 'text' else limit
+        if written > end:
+            data += struct.pack('<I', 0x14000000) * ((written - end) // 4)
+        print(f'.{name}: {end - start}/{limit - start} bytes')
+        sections[name] = dict(start=hex(start), code_end=hex(end), written_end=hex(written))
+        occupied.append((start, written, '.' + name))
+        patches.append((start, data, '.' + name))
+    check_ranges(occupied)
+    if (symbols['NtPanic'] != symbols['__nt_text_start']
+            or symbols['NtSwitchFence'] != syms['_loader_jump'] + 4
+            or not symbols['__nt_extra_start'] <= symbols['NtPreemptArm'] < symbols['__nt_extra_end']):
+        raise ValueError('unexpected native bridge entry layout')
+
+    panic = symbols['NtPanic']
+    patches += [
+        (0xfffffff007309b10, adrp_add(0xfffffff007309b10, symbols['NtSwitchSecond']), 'bounded sched_startup continuation'),
+        (0xfffffff007309b64, branch(0xfffffff007309b64, 0xfffffff007309b98), 'return before powered-core service thread'),
+        (0xfffffff007305b00, struct.pack('<I', 0x52800003), 'bounded continuation keeps IRQ masked'),
+    ]
+    for name in ('_loader_return', '_loader_jump', '_PE_init_iokit', '_hv_wdt_pet'):
+        va = syms[name]
+        patches.append((va, branch(va, panic), f'independent entry fence {name}'))
+    entries = [
+        ('native timer sysreg fix', 0xfffffff007a564a8, 0xfffffff007a565bc),
+        ('GIC hardware tail replacement', 0xfffffff00747487c, symbols['NtGicEntry']),
+        ('native EL1t IRQ vector fence', 0xfffffff00745a080, symbols['NtPreemptIrq']),
+        ('native EL1h IRQ vector fence', 0xfffffff00745a280, symbols['NtPreemptIrq']),
+        ('first native thread entry stop', syms['_kernel_bootstrap_thread'], symbols['NtFirstThread']),
+        ('panic terminal RAM exit', syms['_panic'], panic),
+    ]
+    patches.extend((va, branch(va, target), name) for name, va, target in entries)
+
+    # Only inspect original words that survive the explicit writes, including padded caves.
+    replaced = [(va, va + len(data), name) for va, data, name in patches]
+    check_ranges(replaced)
+    returns = {syms['_loader_jump'], syms['_loader_return']}
+    for seg in segments:
+        if seg['name'] != '__TEXT_EXEC':
+            continue
+        for off in range(seg['off'], seg['off'] + seg['files'] - 3, 4):
+            word, = struct.unpack_from('<I', kernel, off)
+            firmware = firmware_instruction(word)
+            imm = word & 0x3ffffff
+            va = seg['va'] + off - seg['off']
+            legacy = (word & 0x7c000000) == 0x14000000 and va + 4 * (imm - 0x4000000 if imm & 0x2000000 else imm) in returns
+            if (firmware or legacy) and not covered_by(replaced, va):
+                name = 'firmware instruction fail fence' if firmware else 'legacy return call rerouted own RAM stop'
+                patches.append((va, branch(va, panic), name))
+
+    rows = [dict(name=name, va=hex(va), pa=hex(STAGE + va - LINK),
+                 old=original(va, len(data)).hex(), new=data.hex()) for va, data, name in patches]
+    check_patches(rows)
+    manifest = dict(input_image_sha256=image_sha, kernel_sha256=KERNEL_SHA, payload_sha256=sha(payload),
+                    bridge_symbols={n: hex(v) for n, v in symbols.items()}, sections=sections, patches=rows)
+    header = ['/* GENERATED by build_native.py; all writes are staged-RAM only. */']
+
+    def array(name, data):
+        header.append(f'static const unsigned char {name}[]={{' + ','.join(f'0x{n:02x}' for n in data) + '};')
+
+    array('nt_payload_hash', bytes.fromhex(manifest['payload_sha256']))
+    for i, row in enumerate(rows):
+        for kind in ('old', 'new'):
+            array(f'nt_{kind}_{i}', bytes.fromhex(row[kind]))
+    header.append('typedef struct { uint64_t pa,n;const unsigned char *old,*newbytes;} NtPatch;')
+    header.append('static const NtPatch nt_patches[]={')
+    for i, row in enumerate(rows):
+        header.append(f' {{UINT64_C({row["pa"]}),{len(row["new"]) // 2},nt_old_{i},nt_new_{i}}},')
+    header.append('};')
+    (out / 'native_patches.h').write_text('\n'.join(header) + '\n', encoding='ascii')
+    (out / 'runtime_manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='ascii')
+    return manifest
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Build and validate v0.41 staged-RAM patches')
+    parser.add_argument('--input', type=Path, default=KERNEL_BASE)
+    parser.add_argument('--out', type=Path, default=OUT)
+    args = parser.parse_args()
+    build(args.input, args.out)

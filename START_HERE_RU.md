@@ -1,29 +1,26 @@
-# Mu-ruby v0.40: как продолжать
+# Mu-ruby v0.41: подготовка IRQ в QEMU
 
-База v0.39b подтверждена пользователем на Redmi Note 12 Pro 5G (ruby/MT6877): первый kernel thread XNU, диагностический возврат, `Hardware restored=1`, `Restore error=0`.
+Это продолжение v0.40, не новый порт. v0.40 проверял нативное кооперативное переключение XNU; v0.41 сейчас проверяет следующий шаг — проходит ли `NtPreemptArm` с корректными байтами IRQ-векторов. **В этом рубеже IRQ намеренно маскирован, таймер не вооружается и вытеснение не заявляется. Телефон не прошивать.**
 
-v0.40 — следующий крупный шаг: кооперативный переход **boot-поток XNU → второй kernel thread XNU → исходный boot-поток**. Создание потоков, выбор runnable-потока и сохранение/загрузка контекста выполняют настоящие функции XNU, не планировщик в EFI. Введены ограничивающие диагностические патчи вызовов: после кругового перехода дальнейший запуск служебных потоков остановлен; в continuation IRQ остаются замаскированы. Это не периодическое вытесняющее планирование и не полноценная загрузка iOS.
+## Запуск
 
-## Что читать
+Скопируй/распакуй рабочую папку и переносимое окружение в Linux home Debian WSL2. Проверяй переносимое окружение до сборки. В текущем Windows-наборе и в `ruby.7z` отсутствуют 16 указанных в manifest netfilter-заголовков, у которых есть имена, отличающиеся только регистром; остальные контрольные суммы совпали, и недостающие заголовки для этих сборок не понадобились. Для полностью верифицированного окружения нужен оригинал с полным набором файлов, распакованный на чувствительную к регистру Linux-файловую систему. Не менять manifest ради зелёного статуса.
 
-- `REPORT.md`: точная реализация, адреса, ограничения.
-- `ebsprobe/native_switch.S`: диагностические boot/second/resumed-пути.
-- `build_native.py`, `native.ld`: размещение и byte-checked патчи staged RAM.
-- `ebsprobe/native_thread.h`, `native_snapshot_policy.h`, `native_quiet.c`: входные проверки и возврат с восстановлением аппаратного состояния.
-- `test_native_switch.py`: наблюдение настоящих вызовов и сохранённых native-контекстов без подстановки PC/регистров/структур потоков.
-- `verification/final-proof.json`, `tests/*/result.json`, `tests/*/audit-summary.json`: результаты 9 сценариев на конечном образе, 6 успешных круговых переходов и 3 отказа.
-- `independent-quality/result.json`: упаковка, конечный распаковщик UEFI и 12 сценариев BDS/FAT; службы EFI моделируются.
+```sh
+ENV_DIR="$HOME/Mu-ruby-environment-v41"  # укажи фактический путь
+cd "$ENV_DIR"
+sh restore-permissions.sh
+sha256sum --quiet -c manifest.sha256
+cd "$HOME/Mu-ruby-v0.41-preempt-sources-current"
+"$ENV_DIR/run.sh" python -B quality-tools/test_patch_ranges.py
+"$ENV_DIR/run.sh" python -B build_release.py
+"$ENV_DIR/run.sh" python -B test_preempt.py --image out/Mu-ruby-v0.41-QEMU-ONLY.img --inherited 3 --screenshot
+"$ENV_DIR/run.sh" python -B test_preempt.py --image out/Mu-ruby-v0.41-QEMU-ONLY.img --negative-phone-guard
+"$ENV_DIR/run.sh" python -B rebuild.py
+```
 
-## Сборка и проверки на Linux-ПК
+Сборка читает kernel-base v0.38b и упаковочную базу v0.32b из `inputs/`. В `out/` попадают образ, манифест, карта ELF/EFI, заголовок патчей и `build.json`. Для другого выходного каталога передай `build_release.py --out DIR`, `test_preempt.py --image DIR/Mu-ruby-v0.41-QEMU-ONLY.img --results DIR/tests` и `rebuild.py --reference DIR`. Не запускать две тяжёлые виртуальные машины одновременно.
 
-Зависимости перечислены в `requirements-build.txt`, `requirements-test.txt` и `README.md`. Сначала `python build_release.py`, затем `python test_native_switch.py --inherited 3`. Параметр 3 воспроизводит исходный PMR=0xf0 / RPR=0xff. Дополнительные сценарии перечислены в README. Не выполнять два тяжёлых QEMU-прогона одновременно.
+В свежем `out/tests/*/result.json` ожидаются `NtSwitchResumed → NtPreemptArm → NtSwitchPrepared → APP_LOW_RETURN → APP_TERMINAL`, `switch_pass=1`, `preempt_phase=3`, `preempt_count=0`, `restore_error=0`. В тесте без QEMU fixture отказ должен произойти до выделения RAM под XNU. `pass=true` указывает на успех **конкретного сценария подготовки или ожидаемого отказа**, не на успешное IRQ. Тест читает байты всех staged patches до запуска XNU; аудит проверяет отсутствие записи в GIC MMIO и ACK/EOI/DIR/IRQ-unmask в нативном пути.
 
-Архив содержит исходные образы-базы. Исходный Mach-O сохраняется побайтно; диагностические изменения применяются только к выделенной RAM-копии с проверкой оригинальных байтов. Архив не является новым портом всех компонентов с нуля: в базе остаются ранее собранные UEFI/shim.
-
-## Телефонный тест
-
-v0.40 на телефоне пока не подтверждена. Ожидается статичный экран `NATIVE BOOT - SECOND - BOOT: RESUMED`, `Switch pass=1`, `Phase=5`, `Hardware restored=1`, `Restore error=0`. Heartbeat отсутствует намеренно. Реальные адреса потоков могут отличаться от QEMU.
-
-Разрешён только boot_a после проверки активного слота a и успешной передачи/записи образа. Слоты не переключать; GPT, vbmeta, UFS, другие разделы и userdata не трогать. Для отката нужен рабочий оригинальный crDroid boot, не Magisk. Команды установки — в сообщении к выпуску.
-
-QEMU — универсальная Arm-плата, а не достоверная эмуляция MT6877. В модели выполнен настоящий ARM64-код XNU, но это не заменяет тест на ruby. Idle-поток создаётся как предпосылка; его выполнение в этом рубеже не проверено. Второй поток остаётся ждать; после диагностического возврата система намеренно остановлена.
+Файлы `runtime_manifest.json`, `build.json`, `ebsprobe/native_patches.h` и `tests/` **вне `out/`** сохранены как свидетельство старого сбоя и не используются при новой сборке. Старые `test_native_switch.py` и `audit_native_switch.py` относятся к v0.40; для baseline запускай их из отдельной неизменённой папки v0.40.
