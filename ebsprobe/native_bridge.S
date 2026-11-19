@@ -17,8 +17,12 @@ NtGicEntry:
  ldr x16,=0xfffffff0074749ec
  br x16
 .section .extra,"ax"
- /* Unexpected current-EL IRQ fence; preparation must leave IRQ masked. */
-.global NtPreemptIrq
+ /* EL1t IRQ vector: the interrupted native thread runs on SP_EL0 and SP_EL1 is
+  * not owned by this checkpoint, so the frame goes on the interrupted stack. */
+.global NtIrqEl1t,NtPreemptIrq
+NtIrqEl1t:
+  msr spsel,#0
+ /* EL1h vector enters here, on the SP that was already in use. */
 NtPreemptIrq:
   sub sp,sp,#272
   stp x0,x1,[sp,#0]
@@ -118,3 +122,24 @@ NtLowReturn:
  mov x2,#0x40
  ldr x3,[x12,#200]
  br x16
+.section .extra,"ax"
+.global NtIrqWindow,NtIrqWindowEnd
+/* x0 = CNTPCT deadline. The only instructions that may run with PSTATE.I clear.
+ * Leaves when the handler counted one IRQ (NativeState.preempt_count, +504) or at the deadline. */
+NtIrqWindow:
+ msr daifclr,#2
+ movz x1,#0xd800
+ movk x1,#0x07e7,lsl #16
+ movk x1,#0xfff0,lsl #32
+ movk x1,#0xffff,lsl #48
+1:
+ ldr x2,[x1,#504]
+ cbnz x2,2f
+ mrs x3,cntpct_el0
+ cmp x3,x0
+ b.lo 1b
+2:
+ msr daifset,#2
+ isb
+NtIrqWindowEnd:
+ ret

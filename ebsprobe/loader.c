@@ -279,14 +279,14 @@ __attribute__((noinline,noreturn)) void CheckpointOrFault(struct context *c) {
  {
  volatile uint32_t *out=(void *)(uintptr_t)screen;for(uint64_t i=0;i<UINT64_C(1080)*2400;i++)out[i]=UINT32_C(0xff000000);
  NativeState*s=nt_state;uint64_t sc=NTR(sctlr_el1),vb=NTR(vbar_el1);
-  int ok=s->magic==UINT64_C(0x394e415449564553)&&s->reason==0x40&&s->switch_pass&&s->phase==6&&!s->preempt_count&&s->preempt_phase==3&&!s->preempt_error&&s->boot_after==s->boot_before&&s->second&&s->second!=s->boot_before&&s->gic_ready&&s->restored&&!s->restore_error&&!(sc&0x1005)&&vb==(uint64_t)(uintptr_t)OwnVectors;
+  int ok=s->magic==UINT64_C(0x394e415449564553)&&s->reason==0x40&&s->switch_pass&&s->phase==6&&s->preempt_count==1&&s->preempt_iar==27&&s->preempt_phase==7&&!s->preempt_error&&!s->irq_policy&&s->boot_after==s->boot_before&&s->second&&s->second!=s->boot_before&&s->gic_ready&&s->restored&&!s->restore_error&&!(sc&0x1005)&&vb==(uint64_t)(uintptr_t)OwnVectors;
   RawLine(0,"ruby v0.41 - QEMU only",ok?GREEN:RED);
-  RawLine(4,ok?"IRQ PREPARATION: PASS":"IRQ PREPARATION: FAILED",ok?GREEN:RED);
+  RawLine(4,ok?"ONE TIMER IRQ: PASS":s->irq_policy?"ONE TIMER IRQ: REFUSED":"ONE TIMER IRQ: FAILED",ok?GREEN:RED);
  hexline(6,"Native reason=",s->reason,WHITE);hexline(7,"Kernel thread=",s->thread,WHITE);hexline(8,"Native stack=",s->native_sp,WHITE);hexline(9,"GIC bound=",s->gic_ready,WHITE);hexline(10,"Hardware restored=",s->restored,WHITE);hexline(11,"Restore error=",s->restore_error,WHITE);hexline(12,"Return SCTLR=",sc,WHITE);hexline(13,"Kernel SCTLR=",s->native_sctlr,WHITE);
  hexline(14,"Inherited RPR=",s->rpr,WHITE);hexline(15,"Inherited PMR=",s->pmr,WHITE);
- hexline(17,"Preempt IRQ IAR=",s->preempt_iar,WHITE);hexline(18,"Preempt ELR=",s->preempt_elr,WHITE);hexline(19,"Preempt count=",s->preempt_count,WHITE);hexline(20,"Preempt phase=",s->preempt_phase,WHITE);hexline(21,"Preempt error=",s->preempt_error,WHITE);
+ hexline(17,"Preempt IRQ IAR=",s->preempt_iar,WHITE);hexline(18,"Preempt ELR=",s->preempt_elr,WHITE);hexline(19,"Preempt count=",s->preempt_count,WHITE);hexline(20,"Preempt phase=",s->preempt_phase,WHITE);hexline(21,"Preempt error=",s->preempt_error,WHITE);hexline(22,"IRQ policy=",s->irq_policy,WHITE);
  hexline(23,"Boot before=",s->boot_before,WHITE);hexline(24,"Second thread=",s->second,WHITE);hexline(25,"Second stack=",s->second_sp,WHITE);hexline(26,"Boot resumed=",s->boot_after,WHITE);hexline(27,"Switch pass=",s->switch_pass,WHITE);hexline(28,"Phase=",s->phase,WHITE);
-  RawLine(30,"IRQ masked; no timer IRQ or preemption",WHITE);
+  RawLine(30,"One PPI 27 handled; no scheduler, no preemption",WHITE);
   RawLine(32,"Do not flash this image",WHITE);
   if(!ok&&s->reason==0xef){
    hexline(34,"Panic LR=",s->panic_lr,WHITE);hexline(35,"Last ESR (may be stale)=",s->last_esr,WHITE);

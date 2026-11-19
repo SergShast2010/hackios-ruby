@@ -1,5 +1,5 @@
-/* QEMU-only preparation checkpoint. Bind the native mapping read-only;
- * never open Group1 or program/deliver an IRQ on this checkpoint. */
+/* QEMU-only native GIC binding, exit/restore and NtPreemptArm. The one-shot IRQ
+ * (the only GIC/timer writer) is native_irq.c under native_irq_policy.h. */
 #include <stdint.h>
 #include "native_state.h"
 typedef uint64_t u64;typedef uint32_t u32;
@@ -12,7 +12,8 @@ typedef uint64_t u64;typedef uint32_t u32;
 #define S ((volatile NativeState*)0xfffffff007e7d800ULL)
 #define MARK(n) do{S->preempt_phase=(n);__asm__ volatile("dc cvac,%0\ndsb sy"::"r"(&S->preempt_phase):"memory");}while(0)
 extern void NtLowReturn(void) __attribute__((noreturn));
-extern void NtPreemptIrq(void);
+extern void NtPreemptIrq(void),NtIrqEl1t(void);
+extern int NtIrqOnce(void);
 static u64 physical(u64 v){__asm__ volatile("at s1e1r,%0\nisb"::"r"(v):"memory");u64 p=RD(par_el1);return p&1?~0ULL:(p&0xfffffffff000ULL)|(v&4095);}
 void NtExitBody(u64 reason) __attribute__((noreturn));
 void NtExitBody(u64 reason){
@@ -44,22 +45,16 @@ void NtGicBody(void){
  S->gic_ready=1;SYNC();
 }
 
-typedef struct {u64 x[33];} NtIrqFrame;
-__attribute__((section(".extra"),noinline)) void NtPreemptBody(NtIrqFrame *f){
- /* Fail closed: no IAR/EOI/DIR, wakeup, or scheduler call. */
- S->preempt_error=0x101;S->preempt_elr=f->x[31];S->preempt_spsr=f->x[32];
- f->x[32]|=128;SYNC();
-}
 __attribute__((section(".extra"),noinline)) int NtPreemptArm(void){
- const u64 vbar=RD(vbar_el1),t=vbar+0x80,h=vbar+0x280,target=(u64)(uintptr_t)NtPreemptIrq;
+ const u64 vbar=RD(vbar_el1),t=vbar+0x80,h=vbar+0x280,target_t=(u64)(uintptr_t)NtIrqEl1t,target_h=(u64)(uintptr_t)NtPreemptIrq;
  MARK(1);
  if(S->profile!=NT_QEMU_PROFILE||!S->gic_ready||!S->mapped_d||!S->mapped_r||
     !(RD(daif)&128)||RD(icc_igrpen1_el1)||RD(cntfrq_el0)!=62500000||
     vbar!=UINT64_C(0xfffffff00745a000)||S->preempt_error){S->preempt_error=0x201;return 1;}
  S->vector_patch=V32(t);MARK(2);
- u32 want_t=0x14000000|((u32)((target-t)>>2)&0x3ffffff);
- u32 want_h=0x14000000|((u32)((target-h)>>2)&0x3ffffff);
+ u32 want_t=0x14000000|((u32)((target_t-t)>>2)&0x3ffffff);
+ u32 want_h=0x14000000|((u32)((target_h-h)>>2)&0x3ffffff);
  if(S->vector_patch!=want_t||V32(h)!=want_h){S->preempt_error=0x203;return 1;}
  MARK(3);
- return 0;
+ return NtIrqOnce();
 }

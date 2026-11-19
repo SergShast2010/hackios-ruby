@@ -27,6 +27,21 @@ def adrp_add(va, target):
                        0x91000000 | ((target & 4095) << 10))
 
 
+def direct_target(va, word):
+    """Target of B/BL/B.cond/CBZ/CBNZ/TBZ/TBNZ/ADR, else None."""
+    def signed(value, bits):
+        return value - (1 << bits) if value >> (bits - 1) else value
+    if (word & 0x7c000000) == 0x14000000:
+        return va + 4 * signed(word & 0x3ffffff, 26)
+    if (word & 0xff000010) == 0x54000000 or (word & 0x7e000000) == 0x34000000:
+        return va + 4 * signed((word >> 5) & 0x7ffff, 19)
+    if (word & 0x7e000000) == 0x36000000:
+        return va + 4 * signed((word >> 5) & 0x3fff, 14)
+    if (word & 0x9f000000) == 0x10000000:
+        return va + signed(((word >> 5) & 0x7ffff) << 2 | ((word >> 29) & 3), 21)
+    return None
+
+
 def build(image, out):
     image_sha = sha(image.read_bytes())
     if image_sha != KERNEL_BASE_SHA:
@@ -44,7 +59,7 @@ def build(image, out):
              '-Oz', '-Wall', '-Wextra', '-Werror', '-fno-pic', '-fno-unwind-tables',
              '-fno-asynchronous-unwind-tables']
     objects = []
-    for src in ('native_quiet.c', 'native_bridge.S', 'native_switch.S'):
+    for src in ('native_quiet.c', 'native_irq.c', 'native_bridge.S', 'native_switch.S'):
         obj = out / (src + '.o')
         subprocess.run([*flags, '-c', ROOT / 'ebsprobe' / src, '-o', obj], check=True)
         objects.append(obj)
@@ -63,7 +78,7 @@ def build(image, out):
     patches = []
     occupied = []
     sections = {}
-    for name in ('text', 'switch', 'extra'):
+    for name in ('text', 'switch', 'extra', 'irq', 'irqarm'):
         start, end = (symbols[f'__nt_{name}_{key}'] for key in ('start', 'end'))
         limit = syms['_loader_jump'] if name == 'text' else symbols[f'__nt_{name}_limit']
         binary = out / f'native_{name}.bin'
@@ -88,6 +103,12 @@ def build(image, out):
             or symbols['NtSwitchFence'] != syms['_loader_jump'] + 4
             or not symbols['__nt_extra_start'] <= symbols['NtPreemptArm'] < symbols['__nt_extra_end']):
         raise ValueError('unexpected native bridge entry layout')
+    # New caves live strictly behind an entry fence and end at the next live symbol.
+    fenced_caves = [(syms['_hv_wdt_pet'], symbols['__nt_irq_limit'], syms['_user_exception_trace'], '.irq'),
+                    (syms['_PE_init_iokit'], symbols['__nt_irqarm_limit'], syms['_PE_lockdown_iokit'], '.irqarm')]
+    for host, limit, live, name in fenced_caves:
+        if symbols[f'__nt_{name[1:]}_start'] != host + 4 or limit != live:
+            raise ValueError(f'{name} must exactly fill the fenced body at {host:#x}')
 
     panic = symbols['NtPanic']
     patches += [
@@ -101,8 +122,8 @@ def build(image, out):
     entries = [
         ('native timer sysreg fix', 0xfffffff007a564a8, 0xfffffff007a565bc),
         ('GIC hardware tail replacement', 0xfffffff00747487c, symbols['NtGicEntry']),
-        ('native EL1t IRQ vector fence', 0xfffffff00745a080, symbols['NtPreemptIrq']),
-        ('native EL1h IRQ vector fence', 0xfffffff00745a280, symbols['NtPreemptIrq']),
+        ('native EL1t IRQ vector', 0xfffffff00745a080, symbols['NtIrqEl1t']),
+        ('native EL1h IRQ vector', 0xfffffff00745a280, symbols['NtPreemptIrq']),
         ('first native thread entry stop', syms['_kernel_bootstrap_thread'], symbols['NtFirstThread']),
         ('panic terminal RAM exit', syms['_panic'], panic),
     ]
@@ -120,6 +141,11 @@ def build(image, out):
             firmware = firmware_instruction(word)
             imm = word & 0x3ffffff
             va = seg['va'] + off - seg['off']
+            target = direct_target(va, word)
+            if target is not None and not covered_by(replaced, va):
+                for host, limit, _, name in fenced_caves:
+                    if host < target < limit and not host <= va < limit:
+                        raise ValueError(f'surviving kernel branch into {name}: {va:#x} -> {target:#x}')
             legacy = (word & 0x7c000000) == 0x14000000 and va + 4 * (imm - 0x4000000 if imm & 0x2000000 else imm) in returns
             if (firmware or legacy) and not covered_by(replaced, va):
                 name = 'firmware instruction fail fence' if firmware else 'legacy return call rerouted own RAM stop'

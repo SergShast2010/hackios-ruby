@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Observe the exact v0.41 QEMU-only preparation image. This is not an IRQ pass."""
+"""Observe the exact v0.41a QEMU-only image: one PPI 27 into an own handler, no scheduler."""
 import argparse
 import gzip
 import json
@@ -24,9 +24,19 @@ NAMES = ('magic callback profile d r ctlr waker group modifier priority enable p
          'exit_guard stage entry_x0 entry_lr ap1r0 entry_spsel entry_pc rpr switch_magic boot_before '
          'boot_sp_before processor idle_thread second second_sp second_daif second_wait_result boot_after '
          'boot_sp_after switch_pass phase second_sctlr second_vbar boot_daif_after vector_patch preempt_iar '
-         'preempt_elr preempt_spsr preempt_count preempt_phase preempt_error panic_lr last_esr last_far last_elr').split()
-STATE = struct.Struct('<70Q')
+         'preempt_elr preempt_spsr preempt_count preempt_phase preempt_error panic_lr last_esr last_far last_elr '
+         'irq_policy irq_mod irq_timer_ctl irq_timer_cval').split()
+STATE = struct.Struct('<74Q')
 RELEASE = 'M40180050,8:0100000000000000'
+IRQ_EVENTS = ['NtIrqEl1t', 'NtPreemptIrq', 'NtPreemptBody']
+IRQ_OWNED_ALL = 0x7f  # timer, waker, group, priority, GICD gate, CPU gate, enable
+# Fixtures the contract must refuse before any write, with the exact native_irq_policy.h reason:
+# 1/6 inherit an active priority (RPR=0). XNU's own CNTV deadline may or may not have fired by then;
+# that race must not change the outcome.
+REFUSED = {1: 0x2, 6: 0x2}
+GICD, GICR = 0x08000000, 0x080a0000
+GIC_OWNED = {GICD, GICR + 0x14} | {GICR + 0x10000 + off for off in (0x80, 0x100, 0x180, 0x280, 0x41b)}
+IAR1, EOIR1, DIR = 0xd538cc00, 0xd518cc20, 0xd518cb20
 
 
 def require(condition, message):
@@ -39,7 +49,7 @@ def read_artifacts(image):
     release = json.loads((directory / 'build.json').read_text())
     manifest_path, map_path = (directory / name for name in ('runtime_manifest.json', 'loader.map'))
     manifest = json.loads(manifest_path.read_text())
-    require(release['qemu_only'] and release['stage'] == 'prepare-only', 'not the v0.41 preparation image')
+    require(release['qemu_only'] and release['stage'] == 'irq-once', 'not the v0.41a one-IRQ image')
     for key, path in (('image_sha256', image), ('runtime_manifest_sha256', manifest_path),
                       ('loader_map_sha256', map_path)):
         require(release[key] == sha(path.read_bytes()), f'{path.name} does not match build.json')
@@ -61,23 +71,36 @@ def read_artifacts(image):
     return release, manifest, q.map_syms(map_path), app, payload, syms
 
 
-def check_observations(events, state, inherited):
+def check_observations(events, state, inherited, ns):
     names = [event['name'] for event in events]
-    unexpected = {'_panic', 'NtPanic', '_PE_init_iokit', 'NtPreemptIrq', 'NtPreemptBody', 'UNKNOWN'}
+    unexpected = {'_panic', 'NtPanic', '_PE_init_iokit', 'UNKNOWN'}
     require(not unexpected.intersection(names), names)
     if inherited in (2, 4):
         require(names == ['APP_POST_PHYSICAL', 'APP_SNAPSHOT_STOP'] and not state['magic'], names)
         return
+    refused = inherited in REFUSED
     expected = ['_sched_init', '_task_init', '_thread_init', '_load_context', '_machine_load_context',
                 '_kernel_bootstrap_thread', 'NtSwitchBoot', '_idle_thread_create', '_sched_startup',
                 '_kernel_thread_start_priority', 'NtSwitchSecond', 'NtSwitchResumed', 'NtPreemptArm',
-                'NtSwitchPrepared', 'APP_LOW_RETURN', 'APP_TERMINAL']
+                *([] if refused else IRQ_EVENTS), 'NtSwitchPrepared', 'APP_LOW_RETURN', 'APP_TERMINAL']
     observed = iter(names)
     require(all(name in observed for name in expected) and names[-1] == 'APP_TERMINAL', names)
-    wanted = dict(gic_ready=1, reason=0x40, restored=1, restore_error=0, gic_touched=0, switch_pass=1,
-                  phase=6, preempt_phase=3, preempt_count=0, preempt_iar=0, preempt_elr=0, preempt_spsr=0,
-                  preempt_error=0, panic_lr=0, last_esr=0, last_far=0, last_elr=0)
+    require(all(names.count(name) == (0 if refused else 1) for name in IRQ_EVENTS), names)
+    wanted = dict(gic_ready=1, reason=0x40, restored=1, restore_error=0, switch_pass=1, phase=6,
+                  panic_lr=0, last_esr=0, last_far=0, last_elr=0)
+    if refused:
+        wanted.update(gic_touched=0, preempt_phase=3, preempt_count=0, preempt_iar=0, preempt_elr=0,
+                      preempt_spsr=0, preempt_error=0x301, irq_mod=0)
+    else:
+        wanted.update(gic_touched=1, preempt_phase=7, preempt_count=1, preempt_iar=27, preempt_error=0,
+                      irq_policy=0, irq_mod=IRQ_OWNED_ALL)
     require(all(state[key] == value for key, value in wanted.items()), state)
+    if refused:
+        require(state['irq_policy'] == REFUSED[inherited], f"refusal reason {state['irq_policy']:#x}")
+    else:
+        spsr = state['preempt_spsr']
+        require(ns['NtIrqWindow'] < state['preempt_elr'] < ns['NtIrqWindowEnd'], 'IRQ taken outside the unmask window')
+        require((spsr & 0x1f) == 0x04 and not spsr & 0x80, f'IRQ must interrupt EL1t with I clear: {spsr:#x}')
     boot, second = state['boot_before'], state['second']
     require(boot and second and boot == state['boot_after'] == state['entry_tpidr'] == state['thread'] != second,
             'thread identity did not round trip')
@@ -98,9 +121,14 @@ def check_observations(events, state, inherited):
             state['rpr'] == (0 if inherited in (1, 6) else 255), 'wrong inherited fixture')
 
 
-def audit(log, arm, expect_prepared):
+def audit(log, ns, mode):
+    """mode: None (native path not reached), 'refused' (contract said no) or 'irq' (one owned IRQ)."""
+    arm, window, window_end = ns['NtPreemptArm'], ns['NtIrqWindow'], ns['NtIrqWindowEnd']
+    owned = [range(ns[f'__nt_{n}_start'], ns[f'__nt_{n}_end']) for n in ('extra', 'irq', 'irqarm')]
+    cave = type('Owned', (), {'__contains__': lambda self, pc: any(pc in r for r in owned)})()
+    irq = mode == 'irq'
     reached = set()
-    gic_reads = group_writes = 0
+    gic_reads = gic_writes = group_writes = group_opens = iar = eoi = unmask = 0
     completed = False
     with log.open(encoding='ascii') as stream:
         for line in stream:
@@ -112,8 +140,11 @@ def audit(log, arm, expect_prepared):
             if parts[0] == 'M':
                 pa = int(parts[4], 16)
                 if 0x08000000 <= pa < 0x08010000 or 0x080a0000 <= pa < 0x082a0000:
-                    require(parts[2] != 'W', line)
-                    gic_reads += 1
+                    if parts[2] == 'W':
+                        require(irq and pa in GIC_OWNED and int(parts[1], 16) in cave, line)
+                        gic_writes += 1
+                    else:
+                        gic_reads += 1
             if parts[0] != 'I':
                 continue
             pc, word = (int(part, 16) for part in parts[1:3])
@@ -123,25 +154,37 @@ def audit(log, arm, expect_prepared):
                 reached.add(pc)
             op = word & 0xffffffe0
             # Use opcodes: QEMU's GDB XML does not expose these GIC sysregs.
-            require(not firmware_instruction(word) and op not in (0xd538cc00, 0xd518cc20, 0xd518cb20), line)
-            require(not (word & 0xfffff0ff == 0xd50340ff and word & 0x200), line)
+            require(not firmware_instruction(word) and op != DIR, line)
+            if op in (IAR1, EOIR1):
+                require(irq and pc in cave, line)
+                iar += op == IAR1
+                eoi += op == EOIR1
+            if word & 0xfffff0ff == 0xd50340ff and word & 0x200:
+                require(irq and pc == window, line)
+                unmask += 1
             if word >> 24 == 0xd5:
                 regs = dict(item.split('=', 1) for item in parts[3:])
-                require(int(regs['CPSR'], 16) & 128, line)
+                require(int(regs['CPSR'], 16) & 128 or window <= pc < window_end, line)
                 if op in (0xd518cce0, 0xd51b4220, 0xd5184000):  # MSR ICC_IGRPEN1 / DAIF / SPSR
                     rt = word & 31
                     value = 0 if rt == 31 else int(regs[f'x{rt}'], 16)
                     if op == 0xd518cce0:
-                        require(value == 0, line)
-                        group_writes += 1
+                        if value:
+                            require(irq and value == 1 and pc in cave, line)
+                            group_opens += 1
+                        else:
+                            group_writes += 1
                     else:
                         require(value & 128, line)
     require(completed, 'truncated passive audit')
-    if expect_prepared:
+    if mode:
         require({arm, arm + 4, arm + 8} <= reached, 'trace did not execute the first three arm instructions')
         require(gic_reads and group_writes, 'native GIC binding/exit not observed')
-    return {'native_gic_reads': gic_reads, 'native_gic_writes': 0, 'native_group1_closed_writes': group_writes,
-            'native_irq_unmask_ack_eoi_dir_observed': False,
+    once = 1 if irq else 0
+    require((iar, eoi, unmask, group_opens) == (once,) * 4 and bool(gic_writes) == irq,
+            f'IRQ ownership: iar={iar} eoi={eoi} unmask={unmask} group1_open={group_opens} gic_writes={gic_writes}')
+    return {'native_gic_reads': gic_reads, 'native_gic_writes': gic_writes, 'native_group1_closed_writes': group_writes,
+            'native_group1_opens': group_opens, 'iar1_reads': iar, 'eoir1_writes': eoi, 'irq_unmasks': unmask,
             'arm_entry_words_observed': sorted(hex(a) for a in reached)}
 
 
@@ -226,7 +269,7 @@ def run(args):
                     report['native_state'] = {k: hex(v) for k, v in state.items()}
                     if args.screenshot:
                         draw(qm, run_dir)
-                    check_observations(report['events'], state, args.inherited)
+                    check_observations(report['events'], state, args.inherited, ns)
                     if args.inherited not in (2, 4):
                         vector = next(row for row in manifest['patches'] if int(row['va'], 16) == 0xfffffff00745a080)
                         require(state['vector_patch'] == int.from_bytes(bytes.fromhex(vector['new']), 'little'),
@@ -256,7 +299,9 @@ def run(args):
     log = run_dir / 'audit.log'
     if 'error' not in report:
         try:
-            report['audit'] = audit(log, ns['NtPreemptArm'], not args.negative_phone_guard and args.inherited not in (2, 4))
+            mode = (None if args.negative_phone_guard or args.inherited in (2, 4)
+                    else 'refused' if args.inherited in REFUSED else 'irq')
+            report['audit'] = audit(log, ns, mode)
             report['pass'] = True
         except Exception as error:
             report['error'] = f'{type(error).__name__}: {error}'
@@ -277,7 +322,7 @@ def track(r, args, report, syms, ns, base, rv):
                                    '_sched_startup', '_kernel_thread_start_priority', '_thread_invoke',
                                    '_machine_switch_context', '_Switch_context')}
     points.update({ns[n]: n for n in ('NtSwitchBoot', 'NtSwitchSecond', 'NtSwitchResumed', 'NtPreemptArm',
-                                     'NtSwitchPrepared', 'NtPanic', 'NtPreemptIrq', 'NtPreemptBody')})
+                                     'NtSwitchPrepared', 'NtPanic', 'NtIrqEl1t', 'NtPreemptIrq', 'NtPreemptBody')})
     points.update({base + rv(n): label for n, label in (('NativeTerminalDone', 'APP_TERMINAL'),
                    ('NativeSnapshotStopped', 'APP_SNAPSHOT_STOP'), ('XnuReturn', 'APP_LOW_RETURN'),
                    ('PostPhysical', 'APP_POST_PHYSICAL'))})
@@ -303,7 +348,7 @@ def track(r, args, report, syms, ns, base, rv):
             event['self_task'] = hex(struct.unpack('<Q', r.read(regs['TPIDR_EL1'] + 0x428, 8))[0])
         report['events'].append(event)
         print(name, hex(pc), 'tp', hex(regs['TPIDR_EL1']), 'sp', hex(regs['sp']), flush=True)
-        if name in ('APP_TERMINAL', 'APP_SNAPSHOT_STOP', 'UNKNOWN', '_panic', 'NtPanic', 'NtPreemptIrq'):
+        if name in ('APP_TERMINAL', 'APP_SNAPSHOT_STOP', 'UNKNOWN', '_panic', 'NtPanic'):
             return
         require(r.command(f'z1,{pc:x},4') == 'OK', f'cannot remove breakpoint {pc:#x}')
         r.command('s', timeout=max(0.01, deadline - time.monotonic()))
