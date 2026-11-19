@@ -1,0 +1,22 @@
+{
+  "pass": true,
+  "base_proven_image_sha256": "7cfe57f42fbe05ef7d7288b32f06eef6d450ca1812a4b966c6a7f5bebb356f07",
+  "unchanged_files": {
+    "native_thread.h": "e4f0ab8f1244587f58d34b995e462fc147be3371edbf37cb95255c49fd8dea00",
+    "native_snapshot_policy.h": "a8dccc85bcc059ee9737841291ea2cd0fdc8c9bf85ac124fe143cc79690343cf",
+    "native_irq_dt.h": "d93e4591e4b4d85e27bbcb80053933e62e2499603f91a7ea9fa7da244a955f09",
+    "native_sha256.h": "be5d0bcfb44cb1f4502883680c5fc6dafc769d502c8608a404092eb9450435fd",
+    "CpuTopology.h": "16fa3e8e160d051e3e962c11386c00ebf07841ba47cc39d4e1631b8662648270",
+    "IrqFdt.h": "c2c59f020640cd2fe1f88f584f938b9eac63f6b3ccdd17b551abdf43c6b98dd5",
+    "RamContract.h": "9f561f28de2b50956b9fd54ab2f876553071ff8532db1f76684548057329749c",
+    "RubyRamPolicy.h": "4ec8126fa0d8afbde7e403c2fef6206d54ee31f2b195619fd50ecf1bef25c951",
+    "VmCheck.h": "a51eda4c005ce73734acea3e30b64fb7f57c2ede25fc2220a4890961c081bb41",
+    "xnu_prepare.h": "58a2bf8454b5ce729b8d10f94606377b051c263cb26b9b82dc4005c74267f8b6",
+    "ruby_handoff.h": "c9317f35683152689cea9189413a8a33373ff3a6fe6ca1fa41da3deceac7ef33",
+    "ruby_stage.h": "a5608dc36388877dccc7e221e5097cdf75420acd1019141d99121a1e234fe470",
+    "transition.S": "d246be1c48eda2cdf7e3a8ae2e842fcf79a398ca8b8ebed5915743c7981017aa",
+    "irq_vectors.S": "9cce30608fbe9670f198390ff3aac9f8f4fa060eeb8aa4c9e045aac691ad1c3f"
+  },
+  "guest_fixture_identical_to_v39b": true,
+  "guest_fixture_sha256": "284fd6ac935df49af5bb109a2e7db52dfdcb25057d0d7d80ae919d00d4d8b89e"
+}

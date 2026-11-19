@@ -1,0 +1,11 @@
+# build/test outputs
+__pycache__/
+out/
+ebsprobe/*.efi
+ebsprobe/*.bin
+ebsprobe/*.elf
+ebsprobe/*.map
+# large binaries: kept in ../blobs, listed in BLOBS.sha256 (tools/blobs.sh restore)
+*.img
+*.uefi
+*.gz

@@ -1,0 +1,431 @@
+{
+  "scenario": "fat_crc_service_error",
+  "image": "Mu-ruby-v0.40-native-switch.img",
+  "image_sha256": "03222cebb1e928c37d87d3a20f77a7f3cc6ff99fc6271e9ee96ad15c217050e7",
+  "events": [
+    "firmware PE32 section from final FV supplied",
+    "entered native UefiDecompress with private packed snapshot",
+    "native UefiDecompress returned to real LR; no code hooks/replacement during decode"
+  ],
+  "rows": {
+    "0": "ruby v0.30a - checked RAM transport",
+    "1": "High-VA arm_init; native checkpoint 10",
+    "2": "NO UFS / USB / disk writes",
+    "4": "Probe PE from firmware: Success",
+    "5": "RAM CRC service: Device Error",
+    "6": "RAM CRC unavailable; service failed",
+    "7": "16 x 1 MiB; got / expected",
+    "8": "M00 99ABB66E / 99ABB66E",
+    "9": "M01 1C9A93DE / 1C9A93DE",
+    "10": "M02 C05A8C03 / C05A8C03",
+    "11": "M03 BDB74C79 / BDB74C79",
+    "12": "M04 FB84C30E / FB84C30E",
+    "13": "M05 F2B49E90 / F2B49E90",
+    "14": "M06 D46C18F0 / D46C18F0",
+    "15": "M07 1C00AD40 / 1C00AD40",
+    "16": "M08 E61C595F / E61C595F",
+    "17": "M09 509E9501 / 509E9501",
+    "18": "M10 D7A32F3F / D7A32F3F",
+    "19": "M11 CF64E6E0 / CF64E6E0",
+    "20": "M12 EF82A570 / EF82A570",
+    "21": "M13 7C3D9D5E / 7C3D9D5E",
+    "22": "M14 D7B64009 / D7B64009",
+    "23": "M15 B6DFA8F9 / B6DFA8F9",
+    "25": "RAM FAT mismatch; no repair attempted",
+    "26": "No LoadImage / StartImage / EBS / XNU",
+    "27": "Physical UFS/GPT/userdata not exposed",
+    "32": "Launcher stopped before EBS: Compromised Data",
+    "35": "XNU ENTRY STOPPED - send photo"
+  },
+  "rowlog": [
+    [
+      0,
+      "ruby v0.30a - checked RAM transport"
+    ],
+    [
+      1,
+      "High-VA arm_init; native checkpoint 10"
+    ],
+    [
+      2,
+      "NO UFS / USB / disk writes"
+    ],
+    [
+      4,
+      "Probe PE from firmware: Success"
+    ],
+    [
+      5,
+      "Packed RAM CRC: Success"
+    ],
+    [
+      6,
+      "Private packed CRC: Success"
+    ],
+    [
+      6,
+      "Claim decoded FAT RAM: Success"
+    ],
+    [
+      7,
+      "Unpacking FAT into owned RAM..."
+    ],
+    [
+      7,
+      "RAM FAT decompression: Success"
+    ],
+    [
+      5,
+      "RAM CRC service: Device Error"
+    ],
+    [
+      6,
+      "RAM CRC unavailable; service failed"
+    ],
+    [
+      7,
+      "16 x 1 MiB; got / expected"
+    ],
+    [
+      8,
+      "M00 99ABB66E / 99ABB66E"
+    ],
+    [
+      9,
+      "M01 1C9A93DE / 1C9A93DE"
+    ],
+    [
+      10,
+      "M02 C05A8C03 / C05A8C03"
+    ],
+    [
+      11,
+      "M03 BDB74C79 / BDB74C79"
+    ],
+    [
+      12,
+      "M04 FB84C30E / FB84C30E"
+    ],
+    [
+      13,
+      "M05 F2B49E90 / F2B49E90"
+    ],
+    [
+      14,
+      "M06 D46C18F0 / D46C18F0"
+    ],
+    [
+      15,
+      "M07 1C00AD40 / 1C00AD40"
+    ],
+    [
+      16,
+      "M08 E61C595F / E61C595F"
+    ],
+    [
+      17,
+      "M09 509E9501 / 509E9501"
+    ],
+    [
+      18,
+      "M10 D7A32F3F / D7A32F3F"
+    ],
+    [
+      19,
+      "M11 CF64E6E0 / CF64E6E0"
+    ],
+    [
+      20,
+      "M12 EF82A570 / EF82A570"
+    ],
+    [
+      21,
+      "M13 7C3D9D5E / 7C3D9D5E"
+    ],
+    [
+      22,
+      "M14 D7B64009 / D7B64009"
+    ],
+    [
+      23,
+      "M15 B6DFA8F9 / B6DFA8F9"
+    ],
+    [
+      25,
+      "RAM FAT mismatch; no repair attempted"
+    ],
+    [
+      26,
+      "No LoadImage / StartImage / EBS / XNU"
+    ],
+    [
+      27,
+      "Physical UFS/GPT/userdata not exposed"
+    ],
+    [
+      32,
+      "Launcher stopped before EBS: Compromised Data"
+    ],
+    [
+      35,
+      "XNU ENTRY STOPPED - send photo"
+    ]
+  ],
+  "status_calls": [
+    {
+      "row": 4,
+      "label": "Probe PE from firmware",
+      "status": "0x0"
+    },
+    {
+      "row": 5,
+      "label": "Packed RAM CRC",
+      "status": "0x0"
+    },
+    {
+      "row": 6,
+      "label": "Private packed CRC",
+      "status": "0x0"
+    },
+    {
+      "row": 6,
+      "label": "Claim decoded FAT RAM",
+      "status": "0x0"
+    },
+    {
+      "row": 7,
+      "label": "RAM FAT decompression",
+      "status": "0x0"
+    },
+    {
+      "row": 5,
+      "label": "RAM CRC service",
+      "status": "0x8000000000000007"
+    },
+    {
+      "row": 32,
+      "label": "Launcher stopped before EBS",
+      "status": "0x8000000000000021"
+    }
+  ],
+  "crc_calls": [
+    {
+      "kind": "packed",
+      "address": "0x51100000",
+      "bytes": 6291456,
+      "return_rva": "0x15028",
+      "crc32": "0xfc78a8fb",
+      "status": "0x0"
+    },
+    {
+      "kind": "private",
+      "address": "0x70111400",
+      "bytes": 6291456,
+      "return_rva": "0x15088",
+      "crc32": "0xfc78a8fb",
+      "status": "0x0"
+    },
+    {
+      "kind": "fat",
+      "address": "0x66000000",
+      "bytes": 16777216,
+      "return_rva": "0x15ae0",
+      "status": "0x8000000000000007"
+    },
+    {
+      "kind": "chunk",
+      "address": "0x66000000",
+      "bytes": 1048576,
+      "return_rva": "0x15ff0",
+      "crc32": "0x99abb66e",
+      "status": "0x0"
+    },
+    {
+      "kind": "chunk",
+      "address": "0x66100000",
+      "bytes": 1048576,
+      "return_rva": "0x15ff0",
+      "crc32": "0x1c9a93de",
+      "status": "0x0"
+    },
+    {
+      "kind": "chunk",
+      "address": "0x66200000",
+      "bytes": 1048576,
+      "return_rva": "0x15ff0",
+      "crc32": "0xc05a8c03",
+      "status": "0x0"
+    },
+    {
+      "kind": "chunk",
+      "address": "0x66300000",
+      "bytes": 1048576,
+      "return_rva": "0x15ff0",
+      "crc32": "0xbdb74c79",
+      "status": "0x0"
+    },
+    {
+      "kind": "chunk",
+      "address": "0x66400000",
+      "bytes": 1048576,
+      "return_rva": "0x15ff0",
+      "crc32": "0xfb84c30e",
+      "status": "0x0"
+    },
+    {
+      "kind": "chunk",
+      "address": "0x66500000",
+      "bytes": 1048576,
+      "return_rva": "0x15ff0",
+      "crc32": "0xf2b49e90",
+      "status": "0x0"
+    },
+    {
+      "kind": "chunk",
+      "address": "0x66600000",
+      "bytes": 1048576,
+      "return_rva": "0x15ff0",
+      "crc32": "0xd46c18f0",
+      "status": "0x0"
+    },
+    {
+      "kind": "chunk",
+      "address": "0x66700000",
+      "bytes": 1048576,
+      "return_rva": "0x15ff0",
+      "crc32": "0x1c00ad40",
+      "status": "0x0"
+    },
+    {
+      "kind": "chunk",
+      "address": "0x66800000",
+      "bytes": 1048576,
+      "return_rva": "0x15ff0",
+      "crc32": "0xe61c595f",
+      "status": "0x0"
+    },
+    {
+      "kind": "chunk",
+      "address": "0x66900000",
+      "bytes": 1048576,
+      "return_rva": "0x15ff0",
+      "crc32": "0x509e9501",
+      "status": "0x0"
+    },
+    {
+      "kind": "chunk",
+      "address": "0x66a00000",
+      "bytes": 1048576,
+      "return_rva": "0x15ff0",
+      "crc32": "0xd7a32f3f",
+      "status": "0x0"
+    },
+    {
+      "kind": "chunk",
+      "address": "0x66b00000",
+      "bytes": 1048576,
+      "return_rva": "0x15ff0",
+      "crc32": "0xcf64e6e0",
+      "status": "0x0"
+    },
+    {
+      "kind": "chunk",
+      "address": "0x66c00000",
+      "bytes": 1048576,
+      "return_rva": "0x15ff0",
+      "crc32": "0xef82a570",
+      "status": "0x0"
+    },
+    {
+      "kind": "chunk",
+      "address": "0x66d00000",
+      "bytes": 1048576,
+      "return_rva": "0x15ff0",
+      "crc32": "0x7c3d9d5e",
+      "status": "0x0"
+    },
+    {
+      "kind": "chunk",
+      "address": "0x66e00000",
+      "bytes": 1048576,
+      "return_rva": "0x15ff0",
+      "crc32": "0xd7b64009",
+      "status": "0x0"
+    },
+    {
+      "kind": "chunk",
+      "address": "0x66f00000",
+      "bytes": 1048576,
+      "return_rva": "0x15ff0",
+      "crc32": "0xb6dfa8f9",
+      "status": "0x0"
+    }
+  ],
+  "allocations": [
+    {
+      "type": 2,
+      "memory_type": 2,
+      "pages": 4096,
+      "address": "0x66000000"
+    }
+  ],
+  "free_pages": [
+    [
+      "0x66000000",
+      4096
+    ]
+  ],
+  "pools": {},
+  "decoder_entry": 1,
+  "getinfo_entry": 1,
+  "loadimage": 0,
+  "startimage": 0,
+  "unload": 0,
+  "rootclose": 0,
+  "fileclose": 0,
+  "file_reads": 0,
+  "connect": 0,
+  "install": 0,
+  "owned": false,
+  "ebs": 0,
+  "guard_writes": [],
+  "error": null,
+  "native_returned": true,
+  "firmware_section_sha256": "86d9dc82107ee97d45137176a8fb9aba832be5e00ecfc0c86834dc8fb6f67ff9",
+  "firmware_section_bytes": 70656,
+  "decoder_seconds": 18.119,
+  "decoder_status": "0x0",
+  "decoded_before_fault_sha256": "87f57898957f934c62b2a23c66ee2781d83559d3560480ff45a0e84cfd437c78",
+  "final_pc": "0x40001000",
+  "instruction_budget_upper_bound": 1100000000,
+  "decoded_fat_sha256": "87f57898957f934c62b2a23c66ee2781d83559d3560480ff45a0e84cfd437c78",
+  "decoded_fat_crc32": "0x2894961e",
+  "compiled_fat_crc32": "0x2894961e",
+  "compiled_crc_matches_decoded": true,
+  "decoded_chunk_crcs": [
+    "0x99abb66e",
+    "0x1c9a93de",
+    "0xc05a8c03",
+    "0xbdb74c79",
+    "0xfb84c30e",
+    "0xf2b49e90",
+    "0xd46c18f0",
+    "0x1c00ad40",
+    "0xe61c595f",
+    "0x509e9501",
+    "0xd7a32f3f",
+    "0xcf64e6e0",
+    "0xef82a570",
+    "0x7c3d9d5e",
+    "0xd7b64009",
+    "0xb6dfa8f9"
+  ],
+  "compiled_chunks_match_decoded": true,
+  "decoded_fat_sentinel": false,
+  "pool_bytes_left": 0,
+  "guards_intact": true,
+  "pack_readonly_unchanged": true,
+  "seconds": 19.335,
+  "problems": [],
+  "pass": true
+}

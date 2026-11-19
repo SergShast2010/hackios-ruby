@@ -1,0 +1,62 @@
+{
+  "image": "Mu-ruby-v0.40-native-switch.img",
+  "image_sha256": "03222cebb1e928c37d87d3a20f77a7f3cc6ff99fc6271e9ee96ad15c217050e7",
+  "on_device_tested": false,
+  "packaging": "PASS",
+  "sec_decoder": "PASS",
+  "loader_chain": {
+    "all_pass": true,
+    "cases": [
+      {
+        "name": "success",
+        "passed": true
+      },
+      {
+        "name": "packed_input_corrupt",
+        "passed": true
+      },
+      {
+        "name": "packed_padding_corrupt",
+        "passed": true
+      },
+      {
+        "name": "packed_crc_service_error",
+        "passed": true
+      },
+      {
+        "name": "private_crc_service_error",
+        "passed": true
+      },
+      {
+        "name": "snapshot_corrupt",
+        "passed": true
+      },
+      {
+        "name": "fat_crc_service_error",
+        "passed": true
+      },
+      {
+        "name": "sfs_read_wrong_bytes",
+        "passed": true
+      },
+      {
+        "name": "sfs_short_read",
+        "passed": true
+      },
+      {
+        "name": "post_decode_corrupt_SYNTHETIC",
+        "passed": true
+      },
+      {
+        "name": "live_fdt_magic_reject",
+        "passed": true
+      },
+      {
+        "name": "alloc_pages_fail",
+        "passed": true
+      }
+    ],
+    "scope": "Real BDS/FAT decoder, EFI-service doubles; StartImage file resolution only"
+  },
+  "all_pass": true
+}

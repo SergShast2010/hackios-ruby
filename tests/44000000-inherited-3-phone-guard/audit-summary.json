@@ -1,0 +1,13 @@
+{
+  "pass": true,
+  "test": "44000000-inherited-3-phone-guard",
+  "positive_roundtrip": false,
+  "image_sha256": "03222cebb1e928c37d87d3a20f77a7f3cc6ff99fc6271e9ee96ad15c217050e7",
+  "counts": {
+    "external_mmio_records": 1
+  },
+  "system_operations": {},
+  "errors": [],
+  "observer_fixture_release_only": true,
+  "limitations": "QEMU fixture only; selected instruction audit is not a full trace; no phone proof or preemption claim"
+}

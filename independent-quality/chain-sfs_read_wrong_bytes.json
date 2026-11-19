@@ -1,0 +1,235 @@
+{
+  "scenario": "sfs_read_wrong_bytes",
+  "image": "Mu-ruby-v0.40-native-switch.img",
+  "image_sha256": "03222cebb1e928c37d87d3a20f77a7f3cc6ff99fc6271e9ee96ad15c217050e7",
+  "events": [
+    "firmware PE32 section from final FV supplied",
+    "entered native UefiDecompress with private packed snapshot",
+    "native UefiDecompress returned to real LR; no code hooks/replacement during decode",
+    "SFS.Read fault: output byte flipped AFTER native FAT CRC verify; FAT memory untouched"
+  ],
+  "rows": {
+    "0": "ruby v0.30a - checked RAM transport",
+    "1": "High-VA arm_init; native checkpoint 10",
+    "2": "NO UFS / USB / disk writes",
+    "4": "Probe PE from firmware: Success",
+    "5": "Read-only RAM FAT16: Success",
+    "6": "Connect RAM controller: Success",
+    "7": "RAM EFI file integrity: Compromised Data",
+    "32": "Launcher stopped before EBS: Compromised Data",
+    "35": "XNU ENTRY STOPPED - send photo"
+  },
+  "rowlog": [
+    [
+      0,
+      "ruby v0.30a - checked RAM transport"
+    ],
+    [
+      1,
+      "High-VA arm_init; native checkpoint 10"
+    ],
+    [
+      2,
+      "NO UFS / USB / disk writes"
+    ],
+    [
+      4,
+      "Probe PE from firmware: Success"
+    ],
+    [
+      5,
+      "Packed RAM CRC: Success"
+    ],
+    [
+      6,
+      "Private packed CRC: Success"
+    ],
+    [
+      6,
+      "Claim decoded FAT RAM: Success"
+    ],
+    [
+      7,
+      "Unpacking FAT into owned RAM..."
+    ],
+    [
+      7,
+      "RAM FAT decompression: Success"
+    ],
+    [
+      7,
+      "Decoded FAT CRC: Success"
+    ],
+    [
+      5,
+      "Read-only RAM FAT16: Success"
+    ],
+    [
+      6,
+      "Connect RAM controller: Success"
+    ],
+    [
+      7,
+      "RAM EFI file integrity: Compromised Data"
+    ],
+    [
+      32,
+      "Launcher stopped before EBS: Compromised Data"
+    ],
+    [
+      35,
+      "XNU ENTRY STOPPED - send photo"
+    ]
+  ],
+  "status_calls": [
+    {
+      "row": 4,
+      "label": "Probe PE from firmware",
+      "status": "0x0"
+    },
+    {
+      "row": 5,
+      "label": "Packed RAM CRC",
+      "status": "0x0"
+    },
+    {
+      "row": 6,
+      "label": "Private packed CRC",
+      "status": "0x0"
+    },
+    {
+      "row": 6,
+      "label": "Claim decoded FAT RAM",
+      "status": "0x0"
+    },
+    {
+      "row": 7,
+      "label": "RAM FAT decompression",
+      "status": "0x0"
+    },
+    {
+      "row": 7,
+      "label": "Decoded FAT CRC",
+      "status": "0x0"
+    },
+    {
+      "row": 5,
+      "label": "Read-only RAM FAT16",
+      "status": "0x0"
+    },
+    {
+      "row": 6,
+      "label": "Connect RAM controller",
+      "status": "0x0"
+    },
+    {
+      "row": 7,
+      "label": "RAM EFI file integrity",
+      "status": "0x8000000000000021"
+    },
+    {
+      "row": 32,
+      "label": "Launcher stopped before EBS",
+      "status": "0x8000000000000021"
+    }
+  ],
+  "crc_calls": [
+    {
+      "kind": "packed",
+      "address": "0x51100000",
+      "bytes": 6291456,
+      "return_rva": "0x15028",
+      "crc32": "0xfc78a8fb",
+      "status": "0x0"
+    },
+    {
+      "kind": "private",
+      "address": "0x70111400",
+      "bytes": 6291456,
+      "return_rva": "0x15088",
+      "crc32": "0xfc78a8fb",
+      "status": "0x0"
+    },
+    {
+      "kind": "fat",
+      "address": "0x66000000",
+      "bytes": 16777216,
+      "return_rva": "0x15ae0",
+      "crc32": "0x2894961e",
+      "status": "0x0"
+    }
+  ],
+  "allocations": [
+    {
+      "type": 2,
+      "memory_type": 2,
+      "pages": 4096,
+      "address": "0x66000000"
+    }
+  ],
+  "free_pages": [],
+  "pools": {},
+  "decoder_entry": 1,
+  "getinfo_entry": 1,
+  "loadimage": 0,
+  "startimage": 0,
+  "unload": 0,
+  "rootclose": 1,
+  "fileclose": 1,
+  "file_reads": 1,
+  "connect": 1,
+  "install": 1,
+  "owned": true,
+  "ebs": 0,
+  "guard_writes": [],
+  "error": null,
+  "native_returned": true,
+  "firmware_section_sha256": "86d9dc82107ee97d45137176a8fb9aba832be5e00ecfc0c86834dc8fb6f67ff9",
+  "firmware_section_bytes": 70656,
+  "decoder_seconds": 18.42,
+  "decoder_status": "0x0",
+  "decoded_before_fault_sha256": "87f57898957f934c62b2a23c66ee2781d83559d3560480ff45a0e84cfd437c78",
+  "opened_path": "\\EFI\\BOOT\\BOOTAA64.EFI",
+  "decoded_fat_file": {
+    "sha256": "86d9dc82107ee97d45137176a8fb9aba832be5e00ecfc0c86834dc8fb6f67ff9",
+    "file_size": 70656,
+    "first_cluster": 4,
+    "clusters": 138,
+    "first_data_offset": 148992,
+    "sectors_per_cluster": 1
+  },
+  "sfs_read_sha256": "d33167e31d35013e6d72c8f4f6917b9cb49a7e3ffbd8adbbbbe0ca2af726a847",
+  "sfs_read_bytes": 70656,
+  "final_pc": "0x40001000",
+  "instruction_budget_upper_bound": 1100000000,
+  "decoded_fat_sha256": "87f57898957f934c62b2a23c66ee2781d83559d3560480ff45a0e84cfd437c78",
+  "decoded_fat_crc32": "0x2894961e",
+  "compiled_fat_crc32": "0x2894961e",
+  "compiled_crc_matches_decoded": true,
+  "decoded_chunk_crcs": [
+    "0x99abb66e",
+    "0x1c9a93de",
+    "0xc05a8c03",
+    "0xbdb74c79",
+    "0xfb84c30e",
+    "0xf2b49e90",
+    "0xd46c18f0",
+    "0x1c00ad40",
+    "0xe61c595f",
+    "0x509e9501",
+    "0xd7a32f3f",
+    "0xcf64e6e0",
+    "0xef82a570",
+    "0x7c3d9d5e",
+    "0xd7b64009",
+    "0xb6dfa8f9"
+  ],
+  "compiled_chunks_match_decoded": true,
+  "decoded_fat_sentinel": false,
+  "pool_bytes_left": 0,
+  "guards_intact": true,
+  "pack_readonly_unchanged": true,
+  "seconds": 19.669,
+  "problems": [],
+  "pass": true
+}

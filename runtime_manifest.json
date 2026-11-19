@@ -1,0 +1,389 @@
+{
+  "input_image_sha256": "ccf5e56b8221b6c79d7e277ed2e78d231098b5c60084bf0f5315ed4adfd39637",
+  "kernel_sha256": "9239d4adb7a2c433d7ed5729b47b63acc5281af73d8a81640ef3c678c8afd26c",
+  "payload_sha256": "cdbfddb34ed5f3a90b606c4b178f67e40c80bd4ea37831e6609a9eabd36e9b0c",
+  "bridge_symbols": {
+    "XnuAssertWait": "0xfffffff0073017c8",
+    "XnuThreadBlockReason": "0xfffffff007303980",
+    "XnuIdleThreadCreate": "0xfffffff0073099d4",
+    "XnuSchedStartup": "0xfffffff007309aec",
+    "XnuCurrentProcessor": "0xfffffff007451934",
+    "NtPanic": "0xfffffff007472368",
+    "NtGicEntry": "0xfffffff007472374",
+    "NtFirstThread": "0xfffffff007472380",
+    "NtLowReturn": "0xfffffff0074723bc",
+    "NtExitBody": "0xfffffff007472478",
+    "physical": "0xfffffff0074727d4",
+    "NtGicBody": "0xfffffff0074727f4",
+    "NtSwitchFence": "0xfffffff0074729f0",
+    "NtSwitchBoot": "0xfffffff0074729f4",
+    "NtSwitchResumed": "0xfffffff007472a40",
+    "NtSwitchSecond": "0xfffffff007472ab0"
+  },
+  "patches": [
+    {
+      "name": "read-only quiet GIC binding + RAM-only exit cave",
+      "va": "0xfffffff007472368",
+      "pa": "0x63472368",
+      "old": "f65701a9f44f02a9fd7b03a9fdc30091610b0094cb6b0194bd7e0194442a0294175d0294bb79019458cb019457d101942ddd0194d00d0294574800b0584800b008a34039a8040037f30640b92800805208a30039484800b008214039e80300340802a0521401134b153b00d0b5022791564800b0d6a60091a102138be00316aae20314aac9a51994c002148be10315aae20313aac5a5199488e1ffb008453091000541ada00601ad00c1c33ca0c2833c010140ada10200ada0320191c132019182f69f52e201a072b8a51994084500d08902a05209c109b9484800b009254039e9190037493500b01f2003d5290d47f9691900b42a0940f92a1900b42a0540b95f050071cb1800542b0940b97f010a6b68180054cacf92520a13a07290e1ffb0107a31914b4800b06b0100912c0080528c00a0720d4500d04e4800b0310080520f3900d0ef0127910300001420421bd510060091010240393f340071a0ffff54610600340300805220423bd5df4303d562fd5f88c200003522008052627d048884ffff35a200003608000014020080525f3f03d5a2000037640400117f000a6be30304aa69feff5404a34039a3c149b9c4010037647c125384010034e30640b964004111e149243861040011e10600b93f004471a1010054ff0600b9d121003962fb07360c000014647c53d39f0800710801005464040011a4c109b9e169233862fa073604000014c121403981000034e2f907367ffd9f88cdffff1761000c0ba1c109b942f90736fbffff1730c54029107e40933f02106b8a070054317e4093200080520500001421421bd5310600913f0210eb80060054210940f9226871385f00007144184d7a20ffff540400805221423bd5df4303d563fd5f88c300003523008052637d058885ffff35a300003608000014030080525f3f03d5a3000037850400119f000a6be40305aa69feff5405a34039a4c149b9a5010037857c125365010034e40640b985004111e249253882040011e20600b95f00447161010054ff0600b9c02100390c000014857c53d3bf0800712801005485040011a5c109b9e269243805000014c22140396200003582000c0ba2c109b983f907367ffd9f88caffff17310940b93f0600718b070054100080d2f103112a200080520500001421421bd5100600911f0211eb80060054210940f9226870385f00007144184d7a20ffff540400805221423bd5df4303d563fd5f88c300003523008052637d058885ffff35a300003608000014030080525f3f03d5a3000037850400119f000a6be40305aa69feff5405a34039a4c149b9a50100379f00417163010054e40640b985004111e249253882040011e20600b95f00447161010054ff0600b9c02100390c000014857c53d3bf0800712801005485040011a5c109b9e269243805000014c22140396200003582000c0ba2c109b983f9ff347ffd9f88caffff1708254039481200378f3600b0ef011491e90140f9c91100b4883600b0082114910a0140f9490109eb29fd52d3208940fae1100054c9cf92520913a07290e1ffb010d62c914a4800b04a0100912b0080528b00a0720c4500d04d4800b0310080520e3900d0ce0127910300001420421bd510060091010240393f340071a0ffff54610600340300805220423bd5df4303d542fd5f88c200003522008052427d048884ffff35a200003608000014020080525f3f03d5a2000037640400117f00096be30304aa69feff5404a3403983c149b9c4010037647c125384010034e30640b964004111c149243861040011e10600b93f004471a1010054ff0600b9b121003962fb07360c000014647c53d39f080071080100546404001184c109b9c169233862fa073604000014a121403981000034e2f907365ffd9f88cdffff1761000b0b81c109b942f90736fbffff17ef0140f9110140f9ff0111eba2070054300080520600001431421bd5110140f9ef050091ff0111ebc2060054e00140391f34007160ffff540200805231423bd5df4303d541fd5f88c100003521008052417d038883ffff35a100003608000014010080525f3f03d5a1000037430400115f00096be20303aa69feff5403a3403982c149b9c3010037437c125383010034e20640b943004111c049233840040011e00600b91f004471a1010054ff0600b9b021003921fb07360c000014",
+      "new": "df4f03d5e01d80d242000014200100945006005800021fd650060058f1030091118200f991d038d5118600f931423bd5118a00f9009600f91e9a00f9114238d511a200f93105005811a600f9df4f03d58f010014ea0400580b0500582c040058900540f90dfe5ed3ce0400584e792df80d7655d30efe55d3cea96bd32fc080d2ce010faa6e792df82a7a0bd50dfe5ed34d0d0d8b2d7a0bd50d7655d36d0d0d8b2d7a0bd59f3f03d54e2038d5cef978924e2018d5ae0200580e2018d5df3f03d51f8708d59f3f03d5df3f03d5020880d2836540f900021fd6ec494707f0ffffff00d8e707f0ffffff742d3107f0ffffff00d0e707f0ffffff00c0e707f0ffffff03c0e7630000000000d0e76300000000fd7bbda9f50b00f9f5e4849269aa88d2f44f02a9f5fca0f2c92aa9f215fedff2df4f03d5892ac8f2a88252f8c929e7f2fd0300911f0109eb61000054a82240f9680000b43f2003d5ffffff1728008052a9008252a82200f9a0021ff8e8030091a80a00f988d038d5a80600f9081038d5a80e00f908c038d5a81200f9a80e40f9e803282a1f0109ea81030054a80e40f948039837482038d5e90798520801098a1f6900f1a102005408a238d5e803282a1f1d40f221020054e8008192a90253f8a8e8a0f208fedff2080140f93f0108eb41010054a80253f808fd60d3e80000b5a80253f829009f52e903a072085140921f0109eb630000543f2003d5ffffff171f0001f1600000541fe400f161010054a81e40f9e8003836a81a40f9a90640f91f0109eb61000054a81640f9680000b5081d8052a8021ff84900805229e31bd5e8031faae8cc18d5084618d59f3f03d5df3f03d5a8025df8280700b4a8825df8e80600b4b4025df8b3825df8e00314aa7b000094a80254f81f0008ebc1000054e00313aa76000094a88254f81f0008eb600000543f2003d5ffffff17880240b9a90255f83f0108eb41040054681640b9a98255f83f0108ebc1030054081080522800a072696a68b8aa0256f85f0109eb010300540901138b2a814cb9ab8256f87f010aeb61020054296d4e39aa0257f85f0109ebe10100540901138b2a8140b9ab8257f87f010aeb41010054298141b9aa0258f84901094ac900d8370801138b088142b9a98258f82801084a8800d836a80240f9080140b2a80200f968cb38d5a93e40f91f0109eba100005408c938d5a93240f91f0109eb80000054a80240f908017fb2a80200f9a8825af868cc18d5a8025bf888cc18d5a8025af8084618d5a88259f8e8cc18d5a80259f8a8cc18d59f3f03d5df3f03d5a8825cf808e118d5a8025cf848e31bd5a8825bf828e31bd59f3f03d5df3f03d548e33bd5a9025cf81f0109ebc103005428e33bd5a9825bf82801084a1f0540f22103005408e138d5a9825cf81f0109eba1020054e8cc38d5a98259f81f0109eb21020054084638d5a9025af81f0109eba1010054a8cc38d5a90259f81f0109eb2101005468cc38d5a9825af81f0109eba100005488cc38d5a9025bf81f0109eb80000054a80240f908017eb2a80200f928008052a8821ff89f3f03d5df3f03d5fbfeff97007808d5df3f03d5087438d5098d7492092c40b31f0140f220019fdac0035fd6fd7bbda9f65701a9e80b8b92f5fb849208fda0f2f5fca0f26baa88d2f44f02a929423bd5df4f03d508fedff215fedff2cb2aa9f2130140f9140d44f9081144f9aa025ef88b2ac8f2fd030091cb29e7f25f010beba109005489093836730900b4540900b41f0148f101090054e99f40b2a80038d5e91fa0f21f0109ea61080054e00313aad7ffff97a8825ff81f0008eb01080054e00314aad2ffff97a80240f91f0008eb6107005416fcbf128002168bccffff97a80240f90801168b1f0008eb81060054b34600f9b44a00f9680240b9a90640f93f0108eb41050054880640f908fd60d3e80400b508fd9f52686a68b8080d1c121fc100714104005468cb38d5a99a40f91f0109ebc103005408c938d5880300b5e8cc38d5480300b5084638d5a92e40f91f0109ebc1020054a8cc38d58802003663b49692e8bc9992e0031faae3e8a0f2c8e8a0f2e1031f2a03fedff208fedff2e2031faae4031faa00013fd628008052a85200f99f3f03d5df3f03d5f44f42a9f65741a9fd7bc3a8c0035fd6601c8052c0feff97201c8052befeff97401c8052bcfeff97"
+    },
+    {
+      "name": "bounded switch in original fenced legacy loader_jump tail",
+      "va": "0xfffffff0074729f0",
+      "pa": "0x634729f0",
+      "old": "fd7b03a9fdc300911f2003d51f2003d5c86ff658bfc31fb8880100b4494800b02a2540392a0100374a2038d54b1540926c8900d19f2500b1eb030bcb0b25cb9a602940fa80000054fd7b43a9ff030191c0035fd6ea0700f9a8031ff8e00701a92800805228250039fd06009480e1ffb000f83191a11300d1820080521b841794800000344800805228e31bd5170700941f2003d51f2003d5086cf658495000d0290100910801098b0a0540b2ab035ff868fd5bd30c857d92485000f0080100910a692cf82ac080d2ec030baa4c5140b36a7555d32c792af8093900d0290127912be57a920a4500d04cc149b98c01098b7f010cebe20000544cc149b98c01098b2b7a0bd56b0101917f010ceba3ffff540c4500d08c4127918e3540a9abe57a92cd010d8b7f010debe20000548c3540a98c010d8b2b7a0bd56b0101917f010ceba3ffff540b4500d06b2127912b7a0bd56b4100910c4500d08ca127912b7a0bd58e3540a9abe57a92cd010d8b7f010debe20000548c3540a98c010d8b2b7a0bd56b0101917f010ceba3ffff540b4500d06b8127912b7a0bd56b4100912b7a0bd59f3f03d51f2003d51f2003d56b63f65843c149b96001088b6201098be49b40a9a5035ff8e70f40f9df4f03d584f87892442018d5002018d5df3f03d51f8708d59f3f03d5df3f03d5e00302aae10303aae20306aae30307aaa0001fd6200020d4",
+      "new": "4f000014f3090058080880d268ae00f988d038d5e9030091682616a9280080d268de00f9c87bff9760ba00f9ee5bfa976008003568ba40f9080d40f9080800b468be00f9480080d268de00f92c5cfa9788d038d5e903009168261aa92a423bd56aea00f9ca0638366a2e56a91f010aeb610600543f010beb210600546cc240f9ec0500b49f0108eba00500546cc640f96c0500b49f0109eb200500546cde40f99f1100f1c1040054a80080d268de00f9280080d268da00f9000880d273feff171304005888d038d5e9030091682618a92a423bd56aca00f92a0338366bb240f91f010bebc00200546bb640f93f010beb600200540a1038d50bc038d56a2e1ca9680080d268de00f96062059101008052323bfa9760ce00f91f04003101010054880080d268de00f9000080d2010080d2020080529743fa97010000140ffeff1700d8e707f0ffffff00000014000000140000001400000014000000140000001400000014000000140000001400000014000000140000001400000014000000140000001400000014000000140000001400000014000000140000001400000014000000140000001400000014000000140000001400000014000000140000001400000014000000140000001400000014000000140000001400000014000000140000001400000014000000140000001400000014000000140000001400000014"
+    },
+    {
+      "name": "bounded sched_startup native kernel thread continuation",
+      "va": "0xfffffff007309b10",
+      "pa": "0x63309b10",
+      "old": "800800101f2003d5",
+      "new": "400b00b000c02a91"
+    },
+    {
+      "name": "bounded sched_startup return before powered-core service thread",
+      "va": "0xfffffff007309b64",
+      "pa": "0x63309b64",
+      "old": "60080010",
+      "new": "0d000014"
+    },
+    {
+      "name": "diagnostic continuation IRQ masked; enable_interrupts=false",
+      "va": "0xfffffff007305b00",
+      "pa": "0x63305b00",
+      "old": "23008052",
+      "new": "03008052"
+    },
+    {
+      "name": "independent legacy entry fence _loader_return",
+      "va": "0xfffffff007472364",
+      "pa": "0x63472364",
+      "old": "f85fbca9",
+      "new": "01000014"
+    },
+    {
+      "name": "independent legacy entry fence _loader_jump",
+      "va": "0xfffffff0074729ec",
+      "pa": "0x634729ec",
+      "old": "ff0301d1",
+      "new": "5ffeff17"
+    },
+    {
+      "name": "independent forbidden-path fence _PE_init_iokit",
+      "va": "0xfffffff007a56750",
+      "pa": "0x63a56750",
+      "old": "ffc301d1",
+      "new": "066fe817"
+    },
+    {
+      "name": "independent forbidden-path fence _hv_wdt_pet",
+      "va": "0xfffffff0074730f0",
+      "pa": "0x634730f0",
+      "old": "ffc306d1",
+      "new": "9efcff17"
+    },
+    {
+      "name": "independent forbidden-path fence _loader_return_timer",
+      "va": "0xfffffff007472c14",
+      "pa": "0x63472c14",
+      "old": "ff0301d1",
+      "new": "d5fdff17"
+    },
+    {
+      "name": "independent forbidden-path fence _loader_stop_poll",
+      "va": "0xfffffff007472e18",
+      "pa": "0x63472e18",
+      "old": "ff8300d1",
+      "new": "54fdff17"
+    },
+    {
+      "name": "firmware instruction fail fence",
+      "va": "0xfffffff0074607e4",
+      "pa": "0x634607e4",
+      "old": "030000d4",
+      "new": "e1460014"
+    },
+    {
+      "name": "firmware instruction fail fence",
+      "va": "0xfffffff0074607ec",
+      "pa": "0x634607ec",
+      "old": "020000d4",
+      "new": "df460014"
+    },
+    {
+      "name": "firmware instruction fail fence",
+      "va": "0xfffffff007473130",
+      "pa": "0x63473130",
+      "old": "030000d4",
+      "new": "8efcff17"
+    },
+    {
+      "name": "firmware instruction fail fence",
+      "va": "0xfffffff007474eb8",
+      "pa": "0x63474eb8",
+      "old": "020000d4",
+      "new": "2cf5ff17"
+    },
+    {
+      "name": "firmware instruction fail fence",
+      "va": "0xfffffff007474f00",
+      "pa": "0x63474f00",
+      "old": "030000d4",
+      "new": "1af5ff17"
+    },
+    {
+      "name": "firmware instruction fail fence",
+      "va": "0xfffffff0074750d4",
+      "pa": "0x634750d4",
+      "old": "020000d4",
+      "new": "a5f4ff17"
+    },
+    {
+      "name": "firmware instruction fail fence",
+      "va": "0xfffffff0074750f0",
+      "pa": "0x634750f0",
+      "old": "030000d4",
+      "new": "9ef4ff17"
+    },
+    {
+      "name": "firmware instruction fail fence",
+      "va": "0xfffffff00747523c",
+      "pa": "0x6347523c",
+      "old": "020000d4",
+      "new": "4bf4ff17"
+    },
+    {
+      "name": "firmware instruction fail fence",
+      "va": "0xfffffff0074752a4",
+      "pa": "0x634752a4",
+      "old": "020000d4",
+      "new": "31f4ff17"
+    },
+    {
+      "name": "firmware instruction fail fence",
+      "va": "0xfffffff0074752c4",
+      "pa": "0x634752c4",
+      "old": "030000d4",
+      "new": "29f4ff17"
+    },
+    {
+      "name": "firmware instruction fail fence",
+      "va": "0xfffffff0074752e8",
+      "pa": "0x634752e8",
+      "old": "030000d4",
+      "new": "20f4ff17"
+    },
+    {
+      "name": "firmware instruction fail fence",
+      "va": "0xfffffff0074d6cec",
+      "pa": "0x634d6cec",
+      "old": "030000d4",
+      "new": "9f6dfe17"
+    },
+    {
+      "name": "firmware instruction fail fence",
+      "va": "0xfffffff0074d6d18",
+      "pa": "0x634d6d18",
+      "old": "030000d4",
+      "new": "946dfe17"
+    },
+    {
+      "name": "firmware instruction fail fence",
+      "va": "0xfffffff0074fead4",
+      "pa": "0x634fead4",
+      "old": "030000d4",
+      "new": "25cefd17"
+    },
+    {
+      "name": "firmware instruction fail fence",
+      "va": "0xfffffff0074feb00",
+      "pa": "0x634feb00",
+      "old": "030000d4",
+      "new": "1acefd17"
+    },
+    {
+      "name": "firmware instruction fail fence",
+      "va": "0xfffffff00750b7fc",
+      "pa": "0x6350b7fc",
+      "old": "030000d4",
+      "new": "db9afd17"
+    },
+    {
+      "name": "firmware instruction fail fence",
+      "va": "0xfffffff00750b828",
+      "pa": "0x6350b828",
+      "old": "030000d4",
+      "new": "d09afd17"
+    },
+    {
+      "name": "native timer sysreg fix",
+      "va": "0xfffffff007a564a8",
+      "pa": "0x63a564a8",
+      "old": "9efdff97",
+      "new": "45000014"
+    },
+    {
+      "name": "GIC hardware tail replacement",
+      "va": "0xfffffff00747487c",
+      "pa": "0x6347487c",
+      "old": "a8cc38d5",
+      "new": "bef6ff17"
+    },
+    {
+      "name": "first native thread entry stop",
+      "va": "0xfffffff007312d74",
+      "pa": "0x63312d74",
+      "old": "ff4301d1",
+      "new": "837d0514"
+    },
+    {
+      "name": "panic terminal RAM exit",
+      "va": "0xfffffff007acce1c",
+      "pa": "0x63acce1c",
+      "old": "ff8300d1",
+      "new": "5395e617"
+    },
+    {
+      "name": "legacy return call rerouted own RAM stop",
+      "va": "0xfffffff0072cf918",
+      "pa": "0x632cf918",
+      "old": "938a0694",
+      "new": "948a0614"
+    },
+    {
+      "name": "legacy return call rerouted own RAM stop",
+      "va": "0xfffffff0072d07a0",
+      "pa": "0x632d07a0",
+      "old": "f1860694",
+      "new": "f2860614"
+    },
+    {
+      "name": "legacy return call rerouted own RAM stop",
+      "va": "0xfffffff0072d07b4",
+      "pa": "0x632d07b4",
+      "old": "ec860694",
+      "new": "ed860614"
+    },
+    {
+      "name": "legacy return call rerouted own RAM stop",
+      "va": "0xfffffff0072d07e0",
+      "pa": "0x632d07e0",
+      "old": "e1860694",
+      "new": "e2860614"
+    },
+    {
+      "name": "legacy return call rerouted own RAM stop",
+      "va": "0xfffffff0074630e0",
+      "pa": "0x634630e0",
+      "old": "a13c0094",
+      "new": "a23c0014"
+    },
+    {
+      "name": "legacy return call rerouted own RAM stop",
+      "va": "0xfffffff007472c0c",
+      "pa": "0x63472c0c",
+      "old": "78ffff17",
+      "new": "d7fdff17"
+    },
+    {
+      "name": "legacy return call rerouted own RAM stop",
+      "va": "0xfffffff007472dcc",
+      "pa": "0x63472dcc",
+      "old": "66fdff97",
+      "new": "67fdff17"
+    },
+    {
+      "name": "legacy return call rerouted own RAM stop",
+      "va": "0xfffffff007472f64",
+      "pa": "0x63472f64",
+      "old": "00fdff97",
+      "new": "01fdff17"
+    },
+    {
+      "name": "legacy return call rerouted own RAM stop",
+      "va": "0xfffffff007473334",
+      "pa": "0x63473334",
+      "old": "0cfcff17",
+      "new": "0dfcff17"
+    },
+    {
+      "name": "legacy return call rerouted own RAM stop",
+      "va": "0xfffffff007475598",
+      "pa": "0x63475598",
+      "old": "73f3ff97",
+      "new": "74f3ff17"
+    },
+    {
+      "name": "legacy return call rerouted own RAM stop",
+      "va": "0xfffffff0074c1ce4",
+      "pa": "0x634c1ce4",
+      "old": "a0c1fe17",
+      "new": "a1c1fe17"
+    },
+    {
+      "name": "legacy return call rerouted own RAM stop",
+      "va": "0xfffffff0074c7a90",
+      "pa": "0x634c7a90",
+      "old": "35aafe97",
+      "new": "36aafe17"
+    },
+    {
+      "name": "legacy return call rerouted own RAM stop",
+      "va": "0xfffffff0074c7ad0",
+      "pa": "0x634c7ad0",
+      "old": "25aafe97",
+      "new": "26aafe17"
+    },
+    {
+      "name": "legacy return call rerouted own RAM stop",
+      "va": "0xfffffff0074c7b20",
+      "pa": "0x634c7b20",
+      "old": "11aafe97",
+      "new": "12aafe17"
+    },
+    {
+      "name": "legacy return call rerouted own RAM stop",
+      "va": "0xfffffff0074c7b60",
+      "pa": "0x634c7b60",
+      "old": "01aafe97",
+      "new": "02aafe17"
+    },
+    {
+      "name": "legacy return call rerouted own RAM stop",
+      "va": "0xfffffff0074d5714",
+      "pa": "0x634d5714",
+      "old": "1473fe97",
+      "new": "1573fe17"
+    },
+    {
+      "name": "legacy return call rerouted own RAM stop",
+      "va": "0xfffffff0074fd41c",
+      "pa": "0x634fd41c",
+      "old": "d2d3fd97",
+      "new": "d3d3fd17"
+    },
+    {
+      "name": "legacy return call rerouted own RAM stop",
+      "va": "0xfffffff007509980",
+      "pa": "0x63509980",
+      "old": "79a2fd97",
+      "new": "7aa2fd17"
+    },
+    {
+      "name": "legacy return call rerouted own RAM stop",
+      "va": "0xfffffff0075149ac",
+      "pa": "0x635149ac",
+      "old": "6e76fd97",
+      "new": "6f76fd17"
+    },
+    {
+      "name": "legacy return call rerouted own RAM stop",
+      "va": "0xfffffff0075177c8",
+      "pa": "0x635177c8",
+      "old": "e76afd17",
+      "new": "e86afd17"
+    }
+  ]
+}
