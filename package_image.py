@@ -422,9 +422,11 @@ def main():
     args = ap.parse_args()
     base_path, app_path = args.base.resolve(), args.app.resolve()
     output = args.output_dir.resolve()
-    image_path = output/'Mu-ruby-v0.38b-gicgate.img'
+    from v41_artifacts import IMAGE, ROOT
+    image_path = output/IMAGE
     destinations = (image_path, output/'build.json', output/'RamPack.h', output/'EbsPayload.h')
     need(not any(p in (base_path, app_path) for p in destinations), 'output must not overwrite either input')
+    need(output != (ROOT/'inputs').resolve(), 'output must not be inputs/ (pinned base images)')
     image, report, chunks = build(base_path.read_bytes(), app_path.read_bytes())
     output.mkdir(parents=True, exist_ok=True)
     # Writes happen only after all packaging guards have passed.
