@@ -1,4 +1,4 @@
-598d2d47bbcdb9fe2a5668b239d13e9f9206738aa72da01db4b7e3d83f9a5ba0  inputs/current-test-base.img
+598d2d47bbcdb9fe2a5668b239d13e9f9206738aa72da01db4b7e3d83f9a5ba0  archive/v0.41-overlap-failure/inputs/current-test-base.img
+5f4d9ebace620bbfaf8472beb3a39017520e596dc1f525eac0ab388021c2b89d  archive/v0.41-overlap-failure/tests/44000000-inherited-3/audit.log.gz
 773dd3f7ba58e482f183c6154fd1626e38c06a76ec48f4948eebf6a9aa822b1c  inputs/Mu-ruby-v0.32b-appsync.img
 ccf5e56b8221b6c79d7e277ed2e78d231098b5c60084bf0f5315ed4adfd39637  inputs/Mu-ruby-v0.38b-gicgate.img
-5f4d9ebace620bbfaf8472beb3a39017520e596dc1f525eac0ab388021c2b89d  tests/44000000-inherited-3/audit.log.gz

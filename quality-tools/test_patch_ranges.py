@@ -16,7 +16,7 @@ def row(va, n, name='patch'):
 
 class PatchRanges(unittest.TestCase):
     def test_historical_overlaps(self):
-        historical = json.loads((ROOT / 'runtime_manifest.json').read_text())['patches']
+        historical = json.loads((ROOT / 'archive/v0.41-overlap-failure/runtime_manifest.json').read_text())['patches']
         for address in (0xfffffff007472dcc, 0xfffffff007472f64):
             collision = next(r for r in historical if int(r['va'], 16) == address)
             with self.assertRaisesRegex(ValueError, f'overlapping patches at {address:#x}'):
