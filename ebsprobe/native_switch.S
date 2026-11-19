@@ -92,6 +92,14 @@ NtSwitchSecond:
  mov x1,#0
  mov w2,#0
  bl XnuThreadBlockReason
- /* This checkpoint never wakes the second thread. */
+ /* Reached only after the timer wakes this exact XNU waiter. */
+ mov x8,#2
+ str x8,[x19,#592]
+ /* Yield back to the interrupted boot thread through XNU's own path. */
+ mov x0,#0
+ mov x1,#0
+ mov w2,#0
+ bl XnuThreadBlockReason
+ /* A return here means no boot-thread continuation was available. */
 .Lfailure:
  b NtPanic

@@ -23,3 +23,6 @@ XnuIdleThreadCreate = 0xfffffff0073099d4;
 XnuSchedStartup = 0xfffffff007309aec;
 XnuThreadBlockReason = 0xfffffff007303980;
 XnuAssertWait = 0xfffffff0073017c8;
+XnuThreadWakeupPrim = 0xfffffff0073024c8;
+XnuAstOn = 0xfffffff0072c3d84;
+XnuAstTakenKernel = 0xfffffff0072c37c0;

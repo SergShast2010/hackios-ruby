@@ -25,8 +25,8 @@ NAMES = ('magic callback profile d r ctlr waker group modifier priority enable p
          'boot_sp_before processor idle_thread second second_sp second_daif second_wait_result boot_after '
          'boot_sp_after switch_pass phase second_sctlr second_vbar boot_daif_after vector_patch preempt_iar '
          'preempt_elr preempt_spsr preempt_count preempt_phase preempt_error panic_lr last_esr last_far last_elr '
-         'irq_policy irq_mod irq_timer_ctl irq_timer_cval').split()
-STATE = struct.Struct('<74Q')
+         'irq_policy irq_mod irq_timer_ctl irq_timer_cval preempt_sched').split()
+STATE = struct.Struct('<75Q')
 RELEASE = 'M40180050,8:0100000000000000'
 IRQ_EVENTS = ['NtIrqEl1t', 'NtPreemptIrq', 'NtPreemptBody']
 IRQ_OWNED_ALL = 0x7f  # timer, waker, group, priority, GICD gate, CPU gate, enable
@@ -49,7 +49,7 @@ def read_artifacts(image):
     release = json.loads((directory / 'build.json').read_text())
     manifest_path, map_path = (directory / name for name in ('runtime_manifest.json', 'loader.map'))
     manifest = json.loads(manifest_path.read_text())
-    require(release['qemu_only'] and release['stage'] == 'irq-once', 'not the v0.41a one-IRQ image')
+    require(release['qemu_only'] and release['stage'] == 'preempt-one-shot', 'not the v0.41a one-IRQ image')
     for key, path in (('image_sha256', image), ('runtime_manifest_sha256', manifest_path),
                       ('loader_map_sha256', map_path)):
         require(release[key] == sha(path.read_bytes()), f'{path.name} does not match build.json')
@@ -93,7 +93,7 @@ def check_observations(events, state, inherited, ns):
                       preempt_spsr=0, preempt_error=0x301, irq_mod=0)
     else:
         wanted.update(gic_touched=1, preempt_phase=7, preempt_count=1, preempt_iar=27, preempt_error=0,
-                      irq_policy=0, irq_mod=IRQ_OWNED_ALL)
+                      irq_policy=0, irq_mod=IRQ_OWNED_ALL, preempt_sched=3)
     require(all(state[key] == value for key, value in wanted.items()), state)
     if refused:
         require(state['irq_policy'] == REFUSED[inherited], f"refusal reason {state['irq_policy']:#x}")
@@ -107,15 +107,26 @@ def check_observations(events, state, inherited, ns):
     require(state['boot_sp_before'] == state['boot_sp_after'] != state['second_sp'], 'stack did not round trip')
     for name, target in (('_thread_invoke', 'x1'), ('_machine_switch_context', 'x2'), ('_Switch_context', 'x2')):
         seq = [event['regs'] for event in events if event['name'] == name]
-        require([(r['x0'], r[target], r['TPIDR_EL1']) for r in seq] == [(boot, second, boot), (second, boot, second)],
-                f'{name}: not two native cooperative switches')
+        if name == '_thread_invoke':
+            got = [(r['x0'], r[target], r['TPIDR_EL1'], r['x2']) for r in seq]
+            want = [(boot, second, boot, 0), (second, boot, second, 0)]
+            if not refused:
+                want += [(boot, second, boot, 5), (second, boot, second, 0)]
+        else:
+            got = [(r['x0'], r[target], r['TPIDR_EL1']) for r in seq]
+            want = [(boot, second, boot), (second, boot, second)]
+            if not refused:
+                want += [(boot, second, boot), (second, boot, second)]
+        require(got == want, f'{name}: scheduler did not preempt and round-trip')
     for name in ('NtSwitchSecond', 'NtSwitchResumed'):
         event = next(event for event in events if event['name'] == name)
         saved = event['other_thread_saved_context']
         require(saved['words'][11] == 0xfffffff007468450 and saved['words'][12] and saved['task'] == event['self_task'],
                 (name, saved))
-    require(state['second_wait_result'] & 0xffffffff == 0xffffffff and all(e['regs']['cpsr'] & 128 for e in events),
-            'expected second thread waiting and IRQ masked throughout')
+    require(state['second_wait_result'] & 0xffffffff == 0xffffffff and
+            state['preempt_sched'] == (0 if refused else 3) and
+            all(e['regs']['cpsr'] & 128 for e in events),
+            'expected second thread waiting, scheduler proof, and IRQ masked throughout')
     require(not events[-1]['regs']['SCTLR_EL1'] & 0x1005, 'expected MMU and caches off on terminal return')
     require(state['igrpen'] == 0 and state['pmr'] == {0: 0, 1: 0, 3: 0xf0, 5: 0x80, 6: 0xf0}[inherited] and
             state['rpr'] == (0 if inherited in (1, 6) else 255), 'wrong inherited fixture')

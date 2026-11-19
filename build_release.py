@@ -28,7 +28,7 @@ def build(out, kernel_base=KERNEL_BASE, pack_base=PACK_BASE):
         if (packed_app != app or fat_path(fat, [b'EFI        ', b'BOOT       ', b'BOOTAA64EFI']) != app
                 or sha(payload) != manifest['payload_sha256']):
             raise ValueError('final image does not carry the expected loader/payload')
-        report.update(version='0.41', stage='irq-once', qemu_only=True, image=IMAGE,
+        report.update(version='0.41', stage='preempt-one-shot', qemu_only=True, image=IMAGE,
                       kernel_sha256=manifest['kernel_sha256'], kernel_base_sha256=manifest['input_image_sha256'],
                       runtime_manifest_sha256=sha((temp / 'runtime_manifest.json').read_bytes()),
                       loader_map_sha256=sha((temp / 'loader.map').read_bytes()))

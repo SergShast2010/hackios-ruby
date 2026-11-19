@@ -19,6 +19,10 @@ typedef uint64_t u64;typedef uint32_t u32;
 #define FAIL(code) do{S->preempt_error=(code);goto out;}while(0)
 typedef struct {u64 x[33];} NtIrqFrame;
 extern void NtIrqWindow(u64 deadline);
+/* Stage 2: exact XNU ABI from the pinned kernel. */
+extern void XnuThreadWakeupPrim(void *event, u32 one_thread, u32 result);
+extern void XnuAstOn(u32 ast);
+extern void XnuAstTakenKernel(void);
 
 IRQ static int NtWait32(u64 a,u32 mask,u32 want){
  for(u32 i=0;i<NT_IRQ_POLL_LIMIT;i++)if((V32(a)&mask)==want)return 1;
@@ -30,8 +34,16 @@ IRQ_HANDLER void NtPreemptBody(NtIrqFrame *f){
  WR(cntv_ctl_el0,2);SYNC(); /* deassert the owned level source before completion */
  S->preempt_iar=iar;S->preempt_elr=f->x[31];S->preempt_spsr=f->x[32];
  if((iar&0xffffff)<1020){WR(icc_eoir1_el1,iar);SYNC();}
- if(iar==NT_IRQ_ID&&!S->preempt_count){S->preempt_count=1;MARK(5);}
- else S->preempt_error=NT_IRQ_E_UNEXPECTED;
+ if(iar==NT_IRQ_ID&&!S->preempt_count){
+  S->preempt_count=1;MARK(5);
+  /* The waiter used this exact event in NtSwitchSecond. */
+  XnuThreadWakeupPrim((void *)((u64)(uintptr_t)S+344),1,0);
+  S->preempt_sched=1;
+  /* AST_PREEMPT | AST_URGENT: ast_taken_kernel consumes the pending AST. */
+  XnuAstOn(5);
+  XnuAstTakenKernel();
+  S->preempt_sched=3;
+ } else S->preempt_error=NT_IRQ_E_UNEXPECTED;
  f->x[32]|=128;
 }
 IRQ static void NtIrqRestore(u64 d,u64 r){

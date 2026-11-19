@@ -20,11 +20,13 @@ typedef struct {
  uint64_t panic_lr,last_esr,last_far,last_elr;
  /* v0.41a one-shot IRQ contract (native_irq_policy.h). */
  uint64_t irq_policy,irq_mod,irq_timer_ctl,irq_timer_cval;
+ /* Stage 2: scheduler round-trip marker, written by IRQ/second native thread. */
+ uint64_t preempt_sched;
 } NativeState;
 _Static_assert(offsetof(NativeState,panic_lr)==528 && offsetof(NativeState,last_esr)==536 &&
                offsetof(NativeState,last_far)==544 && offsetof(NativeState,last_elr)==552,
                "native panic ABI");
 _Static_assert(offsetof(NativeState,preempt_count)==504,"NtIrqWindow polls preempt_count at +504");
-_Static_assert(sizeof(NativeState)==592,"native diagnostic ABI");
+_Static_assert(sizeof(NativeState)==600,"native diagnostic ABI");
 _Static_assert(sizeof(NativeState)<=2048,"reserved NativeState half-page bound");
 #endif
