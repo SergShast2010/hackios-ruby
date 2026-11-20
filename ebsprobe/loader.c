@@ -9,14 +9,14 @@
 static struct irq_report own_irq_report;
 static RubyIrqHardware irq_hardware;
 static int irq_fdt_ok;
-/* Public symbol also allows component testing; normal firmware has no API
- * selecting QEMU bases. This gate validates the real LK tree before GIC MMIO. */
+/* Public symbol also allows component testing. The DT gate validates the
+ * observed live LK tree before GIC MMIO, and its addresses feed the probe. */
 __attribute__((noinline)) int RubyRunIrq(void){
  irq_fdt_ok=RubyIrqFdt((const unsigned char *)(uintptr_t)UINT64_C(0x47c80000),UINT64_C(0x80000),&irq_hardware);
  if(!irq_fdt_ok)return -100;
  uint64_t hz;__asm__ volatile("mrs %0,cntfrq_el0":"=r"(hz));
  if(irq_hardware.dt_frequency!=hz)return -101;
- return IrqProbeRun(&own_irq_report,IRQ_PROBE_RUBY_D,IRQ_PROBE_RUBY_R,IRQ_PROBE_RUBY_R_BYTES);
+ return IrqProbeRun(&own_irq_report,irq_hardware.gicd,irq_hardware.gicr,irq_hardware.gicr_bytes);
 }
 #define ERR(n) (EFI_ERROR_BIT|(n))
 #define FB UINT64_C(0x7c406000)
