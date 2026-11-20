@@ -6,14 +6,14 @@ import subprocess
 from v41_artifacts import ROOT, OUT
 
 
-def build(out):
+def build(out, extra_flags=()):
     if (ROOT / 'ebsprobe' / 'native_patches.h').exists():
         raise ValueError('stale ebsprobe/native_patches.h would shadow the generated header')
     if not (out / 'native_patches.h').is_file():
         raise ValueError('run build_native.py with the same --out first')
     flags = ['clang', '--target=aarch64-unknown-windows', '-ffreestanding', '-fno-builtin',
              '-fno-stack-protector', '-fshort-wchar', '-mgeneral-regs-only', '-mstrict-align',
-             '-O1', '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter', '-I', str(out)]
+             '-O1', '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter', '-I', str(out), *extra_flags]
     objects = []
     for name in ('loader.c', 'transition.S', 'irq_vectors.S'):
         obj = out / (name + '.obj')

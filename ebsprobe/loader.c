@@ -87,6 +87,40 @@ static void flush(uint64_t a,uint64_t n) {
  for(uint64_t p=a&~(line-1);p<a+n;p+=line)__asm__ volatile("dc cvac,%0"::"r"(p):"memory");
  __asm__ volatile("dsb sy":::"memory");
 }
+#ifdef HACKIOS_RUBY_READONLY
+__attribute__((noinline)) static efi_status RubyReadOnlyMain(efi_system_table *st) {
+ efi_gop *gop=0; efi_status s;
+ if(!st||!st->bs)for(;;)__asm__ volatile("yield");
+ s=st->bs->locate_protocol(&gop_guid,0,(void **)&gop);
+ if(EFI_ERROR(s)||!gop||!gop->mode||!gop->mode->info||
+    gop->mode->info->width!=1080||gop->mode->info->height!=2400||
+    gop->mode->info->pixels_per_scanline<1080||
+    gop->mode->fb_size<1080ULL*2400*4)return ERR(14);
+ screen=(volatile uint32_t *)(uintptr_t)gop->mode->fb_base;
+ physical=0;
+ RawLine(0,"ruby v0.41 - live-FDT read-only",GREEN);
+ RawLine(1,"No ExitBootServices / GIC / storage writes",YELLOW);
+ uint64_t el=0,hz=0,cnt=0;
+ __asm__ volatile("mrs %0,CurrentEL":"=r"(el));
+ __asm__ volatile("mrs %0,cntfrq_el0":"=r"(hz));
+ __asm__ volatile("mrs %0,cntpct_el0":"=r"(cnt));
+ hexline(3,"CurrentEL=",el,WHITE);hexline(4,"CNTFRQ=",hz,WHITE);hexline(5,"CNTPCT=",cnt,WHITE);
+ struct ruby_ram_policy_report ram; RubyIrqHardware irq;
+ unsigned long long fdt=(unsigned long long)RUBY_LIVE_FDT_BASE;
+ unsigned long long ram_status=RubyValidateRamFdt((const unsigned char *)(uintptr_t)fdt,RUBY_LIVE_FDT_LIMIT,&ram);
+ int irq_ok=RubyIrqFdt((const unsigned char *)(uintptr_t)fdt,RUBY_LIVE_FDT_LIMIT,&irq);
+ hexline(7,"FDT base=",fdt,WHITE);hexline(8,"FDT RAM status=",ram_status,ram_status?RED:GREEN);
+ hexline(9,"FDT bytes=",ram.fdt_bytes,WHITE);hexline(10,"IRQ-FDT status=",(uint64_t)(irq_ok?0:1),irq_ok?GREEN:RED);
+ hexline(11,"GICD from FDT=",irq.gicd,WHITE);hexline(12,"GICR from FDT=",irq.gicr,WHITE);
+ hexline(13,"GICR bytes=",irq.gicr_bytes,WHITE);hexline(14,"Timer frequency=",irq.dt_frequency,WHITE);
+ RawLine(16,irq_ok?"Live FDT GIC/timer: Success":"Live FDT GIC/timer: REJECTED",irq_ok?GREEN:RED);
+ RawLine(18,"No GIC/timer MMIO access performed",WHITE);
+ RawLine(20,"READ-ONLY DIAGNOSTIC STOPPED",YELLOW);
+ RawLine(21,"Photograph this screen; no XNU entry",WHITE);
+ for(;;)__asm__ volatile("yield");
+}
+#endif
+
 __attribute__((noinline)) void RawLine(unsigned row,const char *s,uint32_t color) {
  if(!screen||row>=40)return;
  unsigned y0=120+row*54;
@@ -99,7 +133,7 @@ __attribute__((noinline)) void RawLine(unsigned row,const char *s,uint32_t color
     screen[(y0+gy*4+sy)*1080+24+c*24+gx*4+sx]=color;
   }
  }
- if(!physical)flush(FB+(uint64_t)y0*4320,54*4320);
+ if(!physical)flush((uint64_t)(uintptr_t)screen+(uint64_t)y0*4320,54*4320);
  else __asm__ volatile("dsb sy":::"memory");
 }
 static void hexline(unsigned row,const char *label,uint64_t value,uint32_t color) {
@@ -195,6 +229,9 @@ static int map_valid(const unsigned char *map,uint64_t n,uint64_t ds,uint32_t dv
   RamOutside(UINT64_C(0x66000000),UINT64_C(0x01000000),RUBY_XNU_BASE,RUBY_XNU_BYTES);
 }
 __attribute__((noinline)) efi_status efi_main(efi_handle image,efi_system_table *st) {
+#ifdef HACKIOS_RUBY_READONLY
+ return RubyReadOnlyMain(st);
+#else
  efi_gop *gop=0;efi_boot_services *bs;efi_status s;uint64_t el;
  if(NtTestProfile!=NT_QEMU_PROFILE)return ERR(26);
  screen=0;physical=0;if(!st||!st->bs)return ERR(2);bs=st->bs;
@@ -258,6 +295,7 @@ __attribute__((noinline)) efi_status efi_main(efi_handle image,efi_system_table 
   c->map_bytes=bytes;c->desc_size=ds;c->map_key=key;
  }
  RawStop(c);
+#endif
 }
 
 /* Readback oracle covers all 2048 bootstrap PTE words, including unused zeroes.
