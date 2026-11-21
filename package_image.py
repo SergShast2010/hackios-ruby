@@ -316,7 +316,7 @@ def repack_fv(old, replacements):
     return bytes(out)
 
 
-def build(base, app):
+def build(base, app, payload=None):
     need(sha(base) == BASE_SHA256, 'base must be the exact confirmed v32b image')
     opt, _ = pe_offsets(app)
     need(u16(app, opt+68) == 10, 'app must be an EFI Application (subsystem 10)')
@@ -351,7 +351,12 @@ def build(base, app):
     payload_entry = fat.entry([b'PAYLOAD XNP'])
     payload0 = fat.read(payload_entry)
     allocation = fat.replace(app_entry, app)
-    need(fat.read(app_entry) == app and fat.read(payload_entry) == payload0, 'FAT replacement damaged content')
+    expected_payload = payload0
+    payload_alloc = None
+    if payload is not None:
+        payload_alloc = fat.replace(payload_entry, payload)
+        expected_payload = payload
+    need(fat.read(app_entry) == app and fat.read(payload_entry) == expected_payload, 'FAT replacement damaged content')
     fat_bytes = bytes(fat.b)
     if fat_bytes == fat0:
         pack, used = old_pack, used0
@@ -405,7 +410,8 @@ def build(base, app):
               'lzma_uncompressed_bytes': len(fv_new)+8, 'packed_bytes': len(pack),
               'packed_used': used, 'packed_crc': hex(zlib.crc32(pack)),
               'fat_bytes': len(fat_bytes), 'fat_crc': hex(zlib.crc32(fat_bytes)),
-              'payload_sha256': sha(payload0), 'payload_bytes': len(payload0),
+              'payload_sha256': sha(expected_payload), 'payload_bytes': len(expected_payload),
+              'payload_replaced': payload is not None, 'payload_allocation': payload_alloc,
               'shim_sha256': sha(shim), 'dtb_sha256': sha(dtb), 'BDS_sha256': sha(bds),
               'BDS_patches': patches, 'BDS_chunk_table_offset': table,
               'BDS_change_scope': 'only ten pinned MOV immediate fields and 16 CRC32 words',
