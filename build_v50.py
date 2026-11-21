@@ -13,8 +13,8 @@ from v41_artifacts import PACK_BASE, ROOT
 DEFAULT_KERNEL = Path('/home/sergsh/hackios/hakios-xnu-kernel/hakios-kernel')
 DEFAULT_RAMDISK = Path('/home/sergsh/hackios/hakios-xnu-kernel/userland/hello')
 MKPAYLOAD = Path('/home/sergsh/hackios/hakios-xnu-kernel/xnuloader/mkpayload.py')
-V50_OUT = ROOT / 'out' / 'v51b'
-V50_IMAGE = 'Mu-ruby-v0.51b-hakios-smp.img'
+V50_OUT = ROOT / 'out' / 'v52'
+V50_IMAGE = 'Mu-ruby-v0.52-hakios-input.img'
 
 
 def sha256_bytes(b: bytes) -> str:
@@ -100,8 +100,8 @@ if __name__ == '__main__':
     ap.add_argument('--out', type=Path, default=V50_OUT)
     ap.add_argument('--kernel', type=Path, default=DEFAULT_KERNEL)
     ap.add_argument('--ramdisk', type=Path, default=DEFAULT_RAMDISK)
-    ap.add_argument('--cmdline', default='hello_wait=8')
-    ap.add_argument('--kernel-version', default='ruby-v0.51b-mt6877-smp')
+    ap.add_argument('--cmdline', default='')
+    ap.add_argument('--kernel-version', default='ruby-v0.52-mt6877-input')
     ap.add_argument('--pack-base', type=Path, default=PACK_BASE)
     a = ap.parse_args()
     build(a.out, a.kernel, a.ramdisk, a.cmdline, a.kernel_version, a.pack_base)

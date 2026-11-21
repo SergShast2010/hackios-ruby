@@ -662,6 +662,12 @@ __attribute__((noinline, noreturn)) void V50BootPhysical(struct v50_ctx *ctx) {
     }
     if (ctx->cmdline[0]) {
         append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, ctx->cmdline);
+        append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, " ");
+    }
+    if (ctx->is_qemu) {
+        append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "virtio_input=1 keylog=1 touchlog=1 hello_wait=6");
+    } else {
+        append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "buttons=2 keylog=1 touchscreen=2 touchlog=1 hello_wait=25");
     }
 
     uint64_t entry_pa = ctx->entry_va + slide;
@@ -700,11 +706,13 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
     int gic_ok   = valid_log && sfind_n(log, log_len, "gic: v3");
     int bsd_ok   = valid_log && sfind_n(log, log_len, "bsd_init: done");
     int smp_ok   = (ctx->cpu_count <= 1u) || (valid_log && sfind_n(log, log_len, "processors are running"));
+    int btn_ok   = valid_log && (sfind_n(log, log_len, "mtk_buttons: ready") || sfind_n(log, log_len, "virtio-input:"));
+    int touch_ok = valid_log && (sfind_n(log, log_len, "mtk_touch: detected") || sfind_n(log, log_len, "virtio-input: tablet"));
 
     if (hello_ok) {
-        ui_line(ctx, 0, "RUBY v0.51b: XNU SMP + USERLAND PASS!", COL_GREEN);
+        ui_line(ctx, 0, "RUBY v0.52: XNU INPUT + TOUCH PASS!", COL_GREEN);
     } else {
-        ui_line(ctx, 0, "RUBY v0.51b: XNU RETURNED (SEE LOG)", COL_YELLOW);
+        ui_line(ctx, 0, "RUBY v0.52: XNU RETURNED (SEE LOG)", COL_YELLOW);
     }
     ui_hex(ctx, 1, "reason:  ", reason, COL_WHITE);
     ui_hex(ctx, 2, "code/ESR:", code, reason ? COL_RED : COL_WHITE);
@@ -715,12 +723,14 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
     } else {
         char st[64];
         uint32_t n = 0;
-        append_str(st, &n, sizeof(st), "GICv3:");
+        append_str(st, &n, sizeof(st), "GIC:");
         append_str(st, &n, sizeof(st), gic_ok ? "OK " : "NO ");
-        append_str(st, &n, sizeof(st), "BSD:");
-        append_str(st, &n, sizeof(st), bsd_ok ? "OK " : "NO ");
         append_str(st, &n, sizeof(st), "SMP:");
         append_str(st, &n, sizeof(st), (ctx->cpu_count <= 1u) ? "1C " : (smp_ok ? "OK " : "NO "));
+        append_str(st, &n, sizeof(st), "BTN:");
+        append_str(st, &n, sizeof(st), btn_ok ? "OK " : "NO ");
+        append_str(st, &n, sizeof(st), "TCH:");
+        append_str(st, &n, sizeof(st), touch_ok ? "OK " : "NO ");
         append_str(st, &n, sizeof(st), "PID1:");
         append_str(st, &n, sizeof(st), hello_ok ? "OK" : "NO");
         ui_line(ctx, 4, st, (gic_ok && bsd_ok && smp_ok && hello_ok) ? COL_GREEN : COL_YELLOW);
@@ -732,6 +742,34 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
     /* Render tail of XNU's loader_log with line wrapping so nothing clips off the right edge. */
     if (valid_log && ctx->fb_base) {
         uint32_t y_start = (reason == 1) ? 356u : (hello_ok ? 320u : 376u);
+        /* Show mtk_buttons / mtk_touch / virtio-input init & diag lines at top of log pane */
+        if (reason != 1) {
+            uint32_t shown = 0;
+            uint64_t scan = 0;
+            while (scan < log_len && shown < 9u && y_start + 56u < ctx->fb_height) {
+                uint64_t ls = scan;
+                while (scan < log_len && log[scan] != '\n') scan++;
+                uint64_t ll = scan - ls;
+                if (scan < log_len && log[scan] == '\n') scan++;
+                if (ll > 0 && (sfind_n(log + ls, ll, "mtk_buttons:") ||
+                               sfind_n(log + ls, ll, "mtk_touch:") ||
+                               sfind_n(log + ls, ll, "virtio-input:"))) {
+                    char lbuf[96];
+                    uint32_t ln = 0;
+                    uint64_t copy = ll < 88u ? ll : 88u;
+                    for (uint64_t k = 0; k < copy; k++) {
+                        char c = log[ls + k];
+                        if (c >= 32 && c < 127) lbuf[ln++] = c;
+                    }
+                    lbuf[ln] = 0;
+                    uint32_t col = sfind_n(lbuf, ln, "detected") || sfind_n(lbuf, ln, "ready") ? COL_GREEN : COL_CYAN;
+                    fb_draw_text(ctx, 16u, y_start, 2u, lbuf, col, 0u);
+                    y_start += 26u;
+                    shown++;
+                }
+            }
+            if (shown) y_start += 8u;
+        }
         if (!hello_ok) {
             for (uint64_t p = 0; p + 7 <= log_len; p++) {
                 if (log[p]=='g' && log[p+1]=='i' && log[p+2]=='c' && log[p+3]==':' &&
@@ -855,7 +893,7 @@ __attribute__((noinline, noreturn)) void V50OnException(
     ctx->physical = 1;
     g_con = NULL;
     fb_clear(ctx);
-    ui_line(ctx, 0, "RUBY v0.51b: EARLY LOADER EXCEPTION", COL_RED);
+    ui_line(ctx, 0, "RUBY v0.52: EARLY LOADER EXCEPTION", COL_RED);
     ui_hex(ctx, 2, "Vector: ", vec, COL_YELLOW);
     ui_hex(ctx, 3, "ESR:    ", esr, COL_RED);
     ui_hex(ctx, 4, "ELR:    ", elr, COL_WHITE);
@@ -1020,7 +1058,7 @@ efi_status EFIAPI efi_main(efi_handle image, efi_system_table *st) {
         ctx.fb_pitch = (uint64_t)ctx.fb_stride_px * 4ULL;
     }
     fb_clear(&ctx);
-    ui_line(&ctx, 0, "ruby v0.51b - HakiOS XNU 8-core SMP (<4G)", COL_GREEN);
+    ui_line(&ctx, 0, "ruby v0.52 - HakiOS XNU SMP + Input/Touch", COL_GREEN);
 
     uint64_t el = 0;
     __asm__ volatile("mrs %0, CurrentEL" : "=r"(el));
