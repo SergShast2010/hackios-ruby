@@ -191,3 +191,17 @@ V50OwnException:
     mrs  x3, far_el1
     mov  x4, x16
     b    V50OnException
+
+.p2align 4
+.globl V50PsciCall
+/* int64_t V50PsciCall(uint64_t fn, uint64_t a1, uint64_t a2, uint64_t a3, uint32_t use_hvc) */
+V50PsciCall:
+    stp  x18, x30, [sp, #-16]!
+    cbnz w4, 1f
+    smc  #0
+    b    2f
+1:
+    hvc  #0
+2:
+    ldp  x18, x30, [sp], #16
+    ret

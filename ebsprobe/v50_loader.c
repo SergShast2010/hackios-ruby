@@ -20,6 +20,7 @@
 #define BOOT_LINE_LENGTH    608u
 #define NVRAM_BANK_SIZE     0x2000u
 #define PANIC_LOG_SIZE      0x80000u
+#define PSCI_AFFINITY_INFO  0xC4000004ULL
 
 #define COL_BLACK   0xFF000000u
 #define COL_WHITE   0xFFFFFFFFu
@@ -106,6 +107,9 @@ struct v50_ctx {
     uint32_t physical;
     uint64_t cntfrq;
     uint64_t mpidr;
+    uint32_t cpu_count;
+    uint32_t cpu_skipped;
+    uint32_t cpu_mpidr[V50_MAX_CPUS];
     uint64_t io_base, io_size;
     uint64_t gicd, gicd_size;
     uint64_t gicr, gicr_size;
@@ -128,6 +132,7 @@ extern unsigned char __ImageBase[];
 extern void V50EnterPhysical(struct v50_ctx *ctx, uint64_t stack_top) __attribute__((noreturn));
 extern void V50JumpXnu(uint64_t entry_pa, uint64_t boot_args_pa) __attribute__((noreturn));
 extern void V50XnuReturn(void);
+extern int64_t V50PsciCall(uint64_t fn, uint64_t a1, uint64_t a2, uint64_t a3, uint32_t use_hvc);
 
 static efi_text_output *g_con;
 
@@ -467,6 +472,11 @@ static uint32_t build_apple_dt(const struct v50_ctx *ctx, uint64_t dt_pa, uint64
                     dt_prop(&w, "RAMDisk", rd_prop, sizeof(rd_prop));
                 }
             dt_end(&w);
+            if (ctx->is_qemu && ctx->cpu_count > 1u) {
+                dt_begin(&w, "machine-timeouts");
+                    dt_prop_u32(&w, "global-scale", 20u);
+                dt_end(&w);
+            }
         dt_end(&w);
 
         dt_begin(&w, "defaults");
@@ -489,19 +499,25 @@ static uint32_t build_apple_dt(const struct v50_ctx *ctx, uint64_t dt_pa, uint64
         }
 
         dt_begin(&w, "cpus");
-            dt_begin(&w, "cpu0");
-                dt_prop_str(&w, "device_type", "cpu");
-                dt_prop_str(&w, "state", "running");
-                dt_prop_u32(&w, "reg", (uint32_t)(ctx->mpidr & 0x00FFFFFFULL));
-                dt_prop_u32(&w, "cpu-id", 0);
-                dt_prop_u32(&w, "cluster-id", 0);
-                dt_prop_u64(&w, "timebase-frequency", ctx->cntfrq);
-                dt_prop_u64(&w, "fixed-frequency", ctx->cntfrq);
-                dt_prop_u64(&w, "clock-frequency", 1800000000ULL);
-                dt_prop_u64(&w, "bus-frequency", 100000000ULL);
-                dt_prop_u64(&w, "memory-frequency", 100000000ULL);
-                dt_prop_u64(&w, "peripheral-frequency", 24000000ULL);
-            dt_end(&w);
+            uint32_t ncpu = ctx->cpu_count;
+            if (ncpu < 1u) ncpu = 1u;
+            if (ncpu > V50_MAX_CPUS) ncpu = V50_MAX_CPUS;
+            for (uint32_t i = 0; i < ncpu; i++) {
+                char cname[5] = { 'c', 'p', 'u', (char)('0' + i), 0 };
+                dt_begin(&w, cname);
+                    dt_prop_str(&w, "device_type", "cpu");
+                    dt_prop_str(&w, "state", (i == 0) ? "running" : "waiting");
+                    dt_prop_u32(&w, "reg", ctx->cpu_mpidr[i]);
+                    dt_prop_u32(&w, "cpu-id", i);
+                    dt_prop_u32(&w, "cluster-id", 0);
+                    dt_prop_u64(&w, "timebase-frequency", ctx->cntfrq);
+                    dt_prop_u64(&w, "fixed-frequency", ctx->cntfrq);
+                    dt_prop_u64(&w, "clock-frequency", 1800000000ULL);
+                    dt_prop_u64(&w, "bus-frequency", 100000000ULL);
+                    dt_prop_u64(&w, "memory-frequency", 100000000ULL);
+                    dt_prop_u64(&w, "peripheral-frequency", 24000000ULL);
+                dt_end(&w);
+            }
         dt_end(&w);
 
         dt_begin(&w, "arm-io");
@@ -628,7 +644,14 @@ __attribute__((noinline, noreturn)) void V50BootPhysical(struct v50_ctx *ctx) {
     }
 
     uint32_t cl = 0;
-    append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "debug=0x100 cpus=1 ");
+    append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "debug=0x100 ");
+    if (!sfind_n(ctx->cmdline, slen(ctx->cmdline), "cpus=")) {
+        uint32_t nc = ctx->cpu_count;
+        if (nc < 1u) nc = 1u;
+        if (nc > V50_MAX_CPUS) nc = V50_MAX_CPUS;
+        char cbuf[8] = { 'c', 'p', 'u', 's', '=', (char)('0' + nc), ' ', 0 };
+        append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, cbuf);
+    }
     if (rd_size) append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "rd=md0 ");
     append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "-v ");
     if (ctx->kver[0]) {
@@ -674,11 +697,12 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
     int hello_ok = valid_log && sfind_n(log, log_len, "Hello from user space on Darwin!");
     int gic_ok   = valid_log && sfind_n(log, log_len, "gic: v3");
     int bsd_ok   = valid_log && sfind_n(log, log_len, "bsd_init: done");
+    int smp_ok   = (ctx->cpu_count <= 1u) || (valid_log && sfind_n(log, log_len, "processors are running"));
 
     if (hello_ok) {
-        ui_line(ctx, 0, "RUBY v0.50: XNU + USERLAND PID 1 PASS!", COL_GREEN);
+        ui_line(ctx, 0, "RUBY v0.51: XNU SMP + USERLAND PASS!", COL_GREEN);
     } else {
-        ui_line(ctx, 0, "RUBY v0.50: XNU RETURNED (SEE LOG)", COL_YELLOW);
+        ui_line(ctx, 0, "RUBY v0.51: XNU RETURNED (SEE LOG)", COL_YELLOW);
     }
     ui_hex(ctx, 1, "reason:  ", reason, COL_WHITE);
     ui_hex(ctx, 2, "code/ESR:", code, reason ? COL_RED : COL_WHITE);
@@ -693,9 +717,11 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
         append_str(st, &n, sizeof(st), gic_ok ? "OK " : "NO ");
         append_str(st, &n, sizeof(st), "BSD:");
         append_str(st, &n, sizeof(st), bsd_ok ? "OK " : "NO ");
+        append_str(st, &n, sizeof(st), "SMP:");
+        append_str(st, &n, sizeof(st), (ctx->cpu_count <= 1u) ? "1C " : (smp_ok ? "OK " : "NO "));
         append_str(st, &n, sizeof(st), "PID1:");
         append_str(st, &n, sizeof(st), hello_ok ? "OK" : "NO");
-        ui_line(ctx, 4, st, (gic_ok && bsd_ok && hello_ok) ? COL_GREEN : COL_YELLOW);
+        ui_line(ctx, 4, st, (gic_ok && bsd_ok && smp_ok && hello_ok) ? COL_GREEN : COL_YELLOW);
     }
 
     /* Render tail of XNU's loader_log with line wrapping so nothing clips off the right edge. */
@@ -807,7 +833,7 @@ __attribute__((noinline, noreturn)) void V50OnException(
     ctx->physical = 1;
     g_con = NULL;
     fb_clear(ctx);
-    ui_line(ctx, 0, "RUBY v0.50: EARLY LOADER EXCEPTION", COL_RED);
+    ui_line(ctx, 0, "RUBY v0.51: EARLY LOADER EXCEPTION", COL_RED);
     ui_hex(ctx, 2, "Vector: ", vec, COL_YELLOW);
     ui_hex(ctx, 3, "ESR:    ", esr, COL_RED);
     ui_hex(ctx, 4, "ELR:    ", elr, COL_WHITE);
@@ -825,6 +851,7 @@ static int find_qemu_window(efi_boot_services *bs, uint64_t *out_base, uint64_t 
     if (EFI_ERROR(s) || desc_sz < sizeof(efi_memory_descriptor)) return 0;
 
     uint64_t best_base = 0, best_size = 0;
+    uint64_t high_base = 0, high_size = 0;
     for (uint64_t off = 0; off + desc_sz <= map_sz; off += desc_sz) {
         const efi_memory_descriptor *d = (const efi_memory_descriptor *)(map_buf + off);
         if (d->type != EfiConventionalMemory) continue;
@@ -833,12 +860,29 @@ static int find_qemu_window(efi_boot_services *bs, uint64_t *out_base, uint64_t 
         uint64_t a = (start + V50_XNU_ALIGN - 1) & ~(V50_XNU_ALIGN - 1);
         uint64_t e = end & ~(V50_XNU_ALIGN - 1);
         if (e <= a) continue;
+        /* Leave 32 MiB margin for UEFI FAT/GetMemoryMap pool allocations. */
+        if (e - a > V50_XNU_MIN_WIN + V50_XNU_ALIGN) a += V50_XNU_ALIGN;
+        if (e > 0x100000000ULL) {
+            uint64_t ha = a > 0x100000000ULL ? a : 0x100000000ULL;
+            if (e > ha && e - ha >= 0x40000000ULL) {
+                uint64_t hsz = e - ha;
+                if (hsz > V50_XNU_MAX_WIN) hsz = V50_XNU_MAX_WIN;
+                if (hsz > high_size) {
+                    high_base = ha;
+                    high_size = hsz;
+                }
+            }
+        }
         uint64_t sz = e - a;
         if (sz > V50_XNU_MAX_WIN) sz = V50_XNU_MAX_WIN;
         if (sz >= V50_XNU_MIN_WIN && sz > best_size) {
             best_base = a;
             best_size = sz;
         }
+    }
+    if (high_size >= 0x40000000ULL) {
+        best_base = high_base;
+        best_size = high_size;
     }
     if (best_size < V50_XNU_MIN_WIN) return 0;
     uint64_t alloc = best_base;
@@ -954,7 +998,7 @@ efi_status EFIAPI efi_main(efi_handle image, efi_system_table *st) {
         ctx.fb_pitch = (uint64_t)ctx.fb_stride_px * 4ULL;
     }
     fb_clear(&ctx);
-    ui_line(&ctx, 0, "ruby v0.50 - HakiOS XNU from source", COL_GREEN);
+    ui_line(&ctx, 0, "ruby v0.51 - HakiOS XNU SMP + full RAM", COL_GREEN);
 
     uint64_t el = 0;
     __asm__ volatile("mrs %0, CurrentEL" : "=r"(el));
@@ -985,8 +1029,11 @@ efi_status EFIAPI efi_main(efi_handle image, efi_system_table *st) {
             ui_hex(&ctx, 3, "reserved: ", ram.reserved_count, COL_WHITE);
             ui_halt(&ctx, 4, "ERROR: No clean >=256MB RAM in live-FDT", rc);
         }
+        struct v50_cpu_topology topo;
+        uint32_t boot_id = (uint32_t)(ctx.mpidr & 0xFFFFu);
+        uint32_t crc = V50ParseRubyCpus(fdt, RUBY_LIVE_FDT_LIMIT, boot_id, &topo);
         ctx.is_qemu = 0;
-        ctx.psci_hvc = 0;
+        ctx.psci_hvc = (crc == 0) ? topo.psci_hvc : 0u;
         ctx.gicd = irq.gicd;
         ctx.gicd_size = 0x40000ULL;
         ctx.gicr = irq.gicr;
@@ -995,34 +1042,55 @@ efi_status EFIAPI efi_main(efi_handle image, efi_system_table *st) {
         ctx.io_size = 0x10000000ULL;
         ctx.xnu_phys_base = ram.base;
         ctx.xnu_mem_size = ram.size;
+        ctx.cpu_mpidr[0] = boot_id;
+        ctx.cpu_count = 1u;
+        ctx.cpu_skipped = 0u;
+        if (crc == 0 && topo.count > 1u) {
+            for (uint32_t i = 1u; i < topo.count && ctx.cpu_count < V50_MAX_CPUS; i++) {
+                int64_t pst = V50PsciCall(PSCI_AFFINITY_INFO, topo.mpidr[i], 0, 0, ctx.psci_hvc);
+                if (pst == 1 || pst == -1) {
+                    ctx.cpu_mpidr[ctx.cpu_count++] = topo.mpidr[i];
+                } else {
+                    ctx.cpu_skipped++;
+                }
+            }
+        }
         ui_line(&ctx, 1, "Platform: Redmi Note 12 Pro 5G (MT6877)", COL_CYAN);
     } else if (ctx.cntfrq == 62500000ULL) {
+        uint32_t boot_id = (uint32_t)(ctx.mpidr & 0xFFFFu);
         ctx.is_qemu = 1;
         ctx.psci_hvc = 1;
         ctx.gicd = 0x08000000ULL;
         ctx.gicd_size = 0x10000ULL;
         ctx.gicr = 0x080A0000ULL;
-        ctx.gicr_size = 0x100000ULL;
+        ctx.gicr_size = 0x200000ULL;
         ctx.io_base = 0x08000000ULL;
         ctx.io_size = 0x08000000ULL;
-        if (!find_qemu_window(bs, &ctx.xnu_phys_base, &ctx.xnu_mem_size)) {
-            ui_halt(&ctx, 2, "ERROR: No >=256MB window in QEMU MemoryMap", 0);
+        ctx.cpu_mpidr[0] = boot_id;
+        ctx.cpu_count = 1u;
+        ctx.cpu_skipped = 0u;
+        for (uint32_t id = 0; id < V50_MAX_CPUS && ctx.cpu_count < V50_MAX_CPUS; id++) {
+            if (id == boot_id) continue;
+            if (V50PsciCall(PSCI_AFFINITY_INFO, id, 0, 0, 1u) == 1) {
+                ctx.cpu_mpidr[ctx.cpu_count++] = id;
+            }
+        }
+        if (ctx.cpu_count == 1u) {
+            for (uint32_t id = 0; id < V50_MAX_CPUS && ctx.cpu_count < V50_MAX_CPUS; id++) {
+                uint32_t aff1 = id << 8;
+                if (aff1 == boot_id) continue;
+                if (V50PsciCall(PSCI_AFFINITY_INFO, aff1, 0, 0, 1u) == 1) {
+                    ctx.cpu_mpidr[ctx.cpu_count++] = aff1;
+                }
+            }
         }
         ui_line(&ctx, 1, "Platform: QEMU virt (test mode)", COL_YELLOW);
     } else {
         ui_halt(&ctx, 2, "ERROR: Unknown hardware (no ruby FDT)", ctx.cntfrq);
     }
 
-    uint64_t pct = 0, vct = 0;
-    __asm__ volatile("mrs %0, cntpct_el0\nmrs %1, cntvct_el0" : "=r"(pct), "=r"(vct));
-    ui_hex(&ctx, 2, "CNTFRQ:   ", ctx.cntfrq, COL_WHITE);
-    ui_hex(&ctx, 3, "CNTPCT-V: ", pct - vct, (pct == vct) ? COL_GREEN : COL_YELLOW);
-    ui_hex(&ctx, 4, "GICD:     ", ctx.gicd, COL_WHITE);
-    ui_hex(&ctx, 5, "GICR:     ", ctx.gicr, COL_WHITE);
-    ui_hex(&ctx, 6, "XNU base: ", ctx.xnu_phys_base, COL_GREEN);
-    ui_hex(&ctx, 7, "XNU size: ", ctx.xnu_mem_size, COL_GREEN);
-
-    /* Allocate physical stack (64 KiB), pram panic buffer (512 KiB), and payload buffer (16 MiB). */
+    /* Allocate physical stack (64 KiB), pram panic buffer (512 KiB), and payload buffer (16 MiB)
+     * before claiming the QEMU XNU RAM window so AllocateAnyPages never competes with it. */
     uint64_t stack_pa = 0, pram_pa = 0, payload_pa = 0;
     efi_status s = bs->allocate_pages(AllocateAnyPages, EfiLoaderData, 16, &stack_pa);
     if (EFI_ERROR(s)) ui_halt(&ctx, 9, "ERROR: Alloc stack failed", s);
@@ -1035,6 +1103,32 @@ efi_status EFIAPI efi_main(efi_handle image, efi_system_table *st) {
     s = bs->allocate_pages(AllocateAnyPages, EfiLoaderData, PAYLOAD_MAX_BYTES >> 12, &payload_pa);
     if (EFI_ERROR(s)) ui_halt(&ctx, 9, "ERROR: Alloc 16MiB payload buf failed", s);
     ctx.payload_pa = payload_pa;
+
+    if (ctx.is_qemu) {
+        if (!find_qemu_window(bs, &ctx.xnu_phys_base, &ctx.xnu_mem_size)) {
+            ui_halt(&ctx, 2, "ERROR: No >=256MB window in QEMU MemoryMap", 0);
+        }
+    }
+
+    ui_hex(&ctx, 2, "CNTFRQ:   ", ctx.cntfrq, COL_WHITE);
+    {
+        char cpuline[64];
+        uint32_t n = 0;
+        append_str(cpuline, &n, sizeof(cpuline), "CPUs:     ");
+        if (n + 1 < sizeof(cpuline)) cpuline[n++] = (char)('0' + ctx.cpu_count);
+        cpuline[n] = 0;
+        append_str(cpuline, &n, sizeof(cpuline), ctx.psci_hvc ? " (PSCI HVC)" : " (PSCI SMC)");
+        if (ctx.cpu_skipped) {
+            append_str(cpuline, &n, sizeof(cpuline), " skip=");
+            if (n + 1 < sizeof(cpuline)) cpuline[n++] = (char)('0' + (ctx.cpu_skipped > 9 ? 9 : ctx.cpu_skipped));
+            cpuline[n] = 0;
+        }
+        ui_line(&ctx, 3, cpuline, (ctx.cpu_count > 1u) ? COL_GREEN : COL_YELLOW);
+    }
+    ui_hex(&ctx, 4, "GICD:     ", ctx.gicd, COL_WHITE);
+    ui_hex(&ctx, 5, "GICR:     ", ctx.gicr, COL_WHITE);
+    ui_hex(&ctx, 6, "XNU base: ", ctx.xnu_phys_base, COL_GREEN);
+    ui_hex(&ctx, 7, "XNU size: ", ctx.xnu_mem_size, COL_GREEN);
 
     /* Verify no overlap with XNU target window. */
     uint64_t img_pa = (uint64_t)(uintptr_t)__ImageBase;

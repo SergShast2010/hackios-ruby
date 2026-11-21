@@ -4,7 +4,7 @@
 #include common_defconfig
 #include open.config
 CONFIG_DEVICE="ruby"
-CONFIG_CPUS=1
+CONFIG_CPUS=8
 # CONFIG_UFS is not set
 # CONFIG_TOUCHSCREEN is not set
 # CONFIG_HAKIOS_ADSP is not set

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build Mu-ruby v0.50: source-built HakiOS XNU (MT6877) + userland/hello in Mu-Silicium boot.img."""
+"""Build Mu-ruby v0.51: source-built HakiOS XNU (MT6877, 8-core SMP + full RAM) + userland/hello."""
 import argparse
 import hashlib
 import json
@@ -13,8 +13,8 @@ from v41_artifacts import PACK_BASE, ROOT
 DEFAULT_KERNEL = Path('/home/sergsh/hackios/hakios-xnu-kernel/hakios-kernel')
 DEFAULT_RAMDISK = Path('/home/sergsh/hackios/hakios-xnu-kernel/userland/hello')
 MKPAYLOAD = Path('/home/sergsh/hackios/hakios-xnu-kernel/xnuloader/mkpayload.py')
-V50_OUT = ROOT / 'out' / 'v50'
-V50_IMAGE = 'Mu-ruby-v0.50-hakios.img'
+V50_OUT = ROOT / 'out' / 'v51'
+V50_IMAGE = 'Mu-ruby-v0.51-hakios-smp.img'
 
 
 def sha256_bytes(b: bytes) -> str:
@@ -101,7 +101,7 @@ if __name__ == '__main__':
     ap.add_argument('--kernel', type=Path, default=DEFAULT_KERNEL)
     ap.add_argument('--ramdisk', type=Path, default=DEFAULT_RAMDISK)
     ap.add_argument('--cmdline', default='hello_wait=8')
-    ap.add_argument('--kernel-version', default='ruby-v0.50-mt6877')
+    ap.add_argument('--kernel-version', default='ruby-v0.51-mt6877-smp')
     ap.add_argument('--pack-base', type=Path, default=PACK_BASE)
     a = ap.parse_args()
     build(a.out, a.kernel, a.ramdisk, a.cmdline, a.kernel_version, a.pack_base)
