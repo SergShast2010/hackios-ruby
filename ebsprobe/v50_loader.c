@@ -123,6 +123,7 @@ struct v50_ctx {
     uint64_t ramdisk_off;
     uint64_t ramdisk_size;
     uint64_t vm_lo, vm_hi, entry_va;
+    uint64_t isr_pre_jump;
     char cmdline[256];
     char kver[96];
 };
@@ -680,6 +681,7 @@ __attribute__((noinline, noreturn)) void V50BootPhysical(struct v50_ctx *ctx) {
 
     fb_clear(ctx);
     __asm__ volatile("msr cntv_ctl_el0, %0\nmsr cntp_ctl_el0, %0\nisb" : : "r"(2ULL) : "memory");
+    __asm__ volatile("dsb sy\nisb\nmrs %0, isr_el1" : "=r"(ctx->isr_pre_jump));
     V50JumpXnu(entry_pa, ba_pa);
 }
 
@@ -700,9 +702,9 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
     int smp_ok   = (ctx->cpu_count <= 1u) || (valid_log && sfind_n(log, log_len, "processors are running"));
 
     if (hello_ok) {
-        ui_line(ctx, 0, "RUBY v0.51: XNU SMP + USERLAND PASS!", COL_GREEN);
+        ui_line(ctx, 0, "RUBY v0.51b: XNU SMP + USERLAND PASS!", COL_GREEN);
     } else {
-        ui_line(ctx, 0, "RUBY v0.51: XNU RETURNED (SEE LOG)", COL_YELLOW);
+        ui_line(ctx, 0, "RUBY v0.51b: XNU RETURNED (SEE LOG)", COL_YELLOW);
     }
     ui_hex(ctx, 1, "reason:  ", reason, COL_WHITE);
     ui_hex(ctx, 2, "code/ESR:", code, reason ? COL_RED : COL_WHITE);
@@ -722,11 +724,31 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
         append_str(st, &n, sizeof(st), "PID1:");
         append_str(st, &n, sizeof(st), hello_ok ? "OK" : "NO");
         ui_line(ctx, 4, st, (gic_ok && bsd_ok && smp_ok && hello_ok) ? COL_GREEN : COL_YELLOW);
+        if (!hello_ok) {
+            ui_hex(ctx, 5, "ISR_pre: ", ctx->isr_pre_jump, ctx->isr_pre_jump ? COL_RED : COL_WHITE);
+        }
     }
 
     /* Render tail of XNU's loader_log with line wrapping so nothing clips off the right edge. */
     if (valid_log && ctx->fb_base) {
-        uint32_t y_start = (reason == 1) ? 356u : 320u;
+        uint32_t y_start = (reason == 1) ? 356u : (hello_ok ? 320u : 376u);
+        if (!hello_ok) {
+            for (uint64_t p = 0; p + 7 <= log_len; p++) {
+                if (log[p]=='g' && log[p+1]=='i' && log[p+2]=='c' && log[p+3]==':' &&
+                    log[p+4]==' ' && log[p+5]=='v' && log[p+6]=='3') {
+                    char gbuf[128];
+                    uint32_t gn = 0;
+                    while (p + gn < log_len && gn + 1 < sizeof(gbuf) && log[p + gn] != '\n' && log[p + gn] != '\r') {
+                        gbuf[gn] = log[p + gn];
+                        gn++;
+                    }
+                    gbuf[gn] = 0;
+                    fb_draw_text(ctx, 16u, y_start, 2u, gbuf, COL_CYAN, 0u);
+                    y_start += 28u;
+                    break;
+                }
+            }
+        }
         uint32_t row_h = 28u;
         uint32_t max_rows = (ctx->fb_height > y_start + 56u) ? ((ctx->fb_height - y_start - 56u) / row_h) : 0;
         if (max_rows > 72u) max_rows = 72u;
@@ -833,7 +855,7 @@ __attribute__((noinline, noreturn)) void V50OnException(
     ctx->physical = 1;
     g_con = NULL;
     fb_clear(ctx);
-    ui_line(ctx, 0, "RUBY v0.51: EARLY LOADER EXCEPTION", COL_RED);
+    ui_line(ctx, 0, "RUBY v0.51b: EARLY LOADER EXCEPTION", COL_RED);
     ui_hex(ctx, 2, "Vector: ", vec, COL_YELLOW);
     ui_hex(ctx, 3, "ESR:    ", esr, COL_RED);
     ui_hex(ctx, 4, "ELR:    ", elr, COL_WHITE);
@@ -998,7 +1020,7 @@ efi_status EFIAPI efi_main(efi_handle image, efi_system_table *st) {
         ctx.fb_pitch = (uint64_t)ctx.fb_stride_px * 4ULL;
     }
     fb_clear(&ctx);
-    ui_line(&ctx, 0, "ruby v0.51 - HakiOS XNU SMP + full RAM", COL_GREEN);
+    ui_line(&ctx, 0, "ruby v0.51b - HakiOS XNU 8-core SMP (<4G)", COL_GREEN);
 
     uint64_t el = 0;
     __asm__ volatile("mrs %0, CurrentEL" : "=r"(el));

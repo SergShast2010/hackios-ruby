@@ -16,6 +16,9 @@
 #define V50_XNU_ALIGN       0x02000000ULL /* 32 MiB: L2 block size with 16K pages */
 #define V50_XNU_MIN_WIN     0x10000000ULL /* 256 MiB */
 #define V50_XNU_MAX_WIN     0x180000000ULL /* 6 GiB: matches XNU bootstrap page tables */
+#ifndef V50_RUBY_ALLOW_HIGH_RAM
+#define V50_RUBY_ALLOW_HIGH_RAM 0 /* v0.51b: isolate 8-core SMP on proven <4 GiB Rank 0 RAM first */
+#endif
 #define V50_MAX_RANGES      256u
 #define V50_MAX_CPUS        8u
 
@@ -269,6 +272,11 @@ static uint32_t V50FindRubyRamWindow(const unsigned char *f, uint64_t cap, struc
     for (uint32_t i = 0; i < fcnt; i++) {
         uint64_t s = (free_r[i].start + V50_XNU_ALIGN - 1) & ~(V50_XNU_ALIGN - 1);
         uint64_t e = free_r[i].end & ~(V50_XNU_ALIGN - 1);
+#if !V50_RUBY_ALLOW_HIGH_RAM
+        if (s >= 0x100000000ULL) continue;
+        if (e > 0x100000000ULL) e = 0x100000000ULL;
+        e &= ~(V50_XNU_ALIGN - 1);
+#endif
         if (e <= s) continue;
         uint64_t sz = e - s;
         if (sz > V50_XNU_MAX_WIN) sz = V50_XNU_MAX_WIN;
