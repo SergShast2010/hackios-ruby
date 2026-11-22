@@ -124,21 +124,7 @@ static uint64_t ufs_le64(const uint8_t *p) {
 	return (uint64_t)ufs_le32(p) | ((uint64_t)ufs_le32(p + 4) << 32);
 }
 
-static uint64_t
-ufs_ticks(void)
-{
-	uint64_t t;
-	__asm__ volatile("isb; mrs %0, cntvct_el0" : "=r"(t));
-	return t;
-}
-
-static uint64_t
-ufs_freq(void)
-{
-	uint64_t f;
-	__asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f));
-	return f ? f : 13000000ULL;
-}
+/* Timeout uses native XNU clock_interval_to_deadline() + mach_absolute_time(). */
 
 /* Strictly read-only SCSI transfer (direction is always NONE or DATA-IN). */
 static uint32_t
@@ -193,10 +179,10 @@ ufs_scsi_ro(uint8_t lun, const uint8_t *cdb, unsigned cdb_len,
 	ufs_dcache_civac(&ufs_meta.ucd, sizeof(ufs_meta.ucd));
 
 	ufs_wr(REG_UTRLDBR, 1u);
-	uint64_t start = ufs_ticks();
-	uint64_t limit = ufs_freq(); /* 1 s timeout */
+	uint64_t deadline = 0;
+	clock_interval_to_deadline(1000, NSEC_PER_MSEC, &deadline);
 	while (ufs_rd(REG_UTRLDBR) & 1u) {
-		if (ufs_ticks() - start > limit) {
+		if (mach_absolute_time() > deadline) {
 			ufs_wr(REG_UTRLCLR, ~1u);
 			return 1u;
 		}
@@ -352,8 +338,8 @@ ramdiag_open(__unused dev_t dev, __unused int flags, __unused int type, __unused
 
 	uint64_t saved_daif = 0, pre_isr = 0;
 	__asm__ volatile("mrs %0, daif" : "=r"(saved_daif));
-	__asm__ volatile("msr daifset, #4; isb" ::: "memory");
-	__asm__ volatile("dsb sy; isb; mrs %0, isr_el1" : "=r"(pre_isr));
+	__asm__ volatile("msr daifset, #4\n\tisb" ::: "memory");
+	__asm__ volatile("dsb sy\n\tisb\n\tmrs %0, isr_el1" : "=r"(pre_isr));
 
 	for (unsigned i = 0; i < sizeof(addrs) / sizeof(addrs[0]); i++) {
 		uint64_t pa = addrs[i];
@@ -367,7 +353,7 @@ ramdiag_open(__unused dev_t dev, __unused int flags, __unused int type, __unused
 		for (int k = 0; k < 8; k++) {
 			saved[k] = ptr[k];
 		}
-		__asm__ volatile("dsb sy; dc civac, %0; dsb sy; isb" :: "r"(va) : "memory");
+		__asm__ volatile("dsb sy\n\tdc civac, %0\n\tdsb sy\n\tisb" :: "r"(va) : "memory");
 		uint64_t isr = 0;
 		__asm__ volatile("mrs %0, isr_el1" : "=r"(isr));
 		if (isr & 0x100ULL) {
@@ -379,7 +365,7 @@ ramdiag_open(__unused dev_t dev, __unused int flags, __unused int type, __unused
 		for (int k = 0; k < 8; k++) {
 			ptr[k] = saved[k];
 		}
-		__asm__ volatile("dsb sy; dc civac, %0; dsb sy; isb" :: "r"(va) : "memory");
+		__asm__ volatile("dsb sy\n\tdc civac, %0\n\tdsb sy\n\tisb" :: "r"(va) : "memory");
 		__asm__ volatile("mrs %0, isr_el1" : "=r"(isr));
 		if (isr & 0x100ULL) {
 			printf("mtk_ram_diag: SERROR WRITE pa=0x%llx isr=0x%llx pre=0x%llx\n",
@@ -391,7 +377,7 @@ ramdiag_open(__unused dev_t dev, __unused int flags, __unused int type, __unused
 
 	printf("mtk_ram_diag: ALL 9 HIGH-PA WBACK CLEAN (0x100000000..0x23D000000 pre=0x%llx)\n",
 	    (unsigned long long)pre_isr);
-	__asm__ volatile("msr daif, %0; isb" :: "r"(saved_daif) : "memory");
+	__asm__ volatile("msr daif, %0\n\tisb" :: "r"(saved_daif) : "memory");
 	return 0;
 }
 

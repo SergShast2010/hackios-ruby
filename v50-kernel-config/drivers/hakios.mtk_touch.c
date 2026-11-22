@@ -324,9 +324,9 @@ spi_xfer(const uint8_t *tx, uint8_t *rx, unsigned len)
 }
 
 static void
-spi_read_req(uint8_t *tx, uint32_t addr)
+spi_read_req(uint8_t *tx, unsigned len, uint32_t addr)
 {
-	for (unsigned i = 0; i < 40; i++) {
+	for (unsigned i = 0; i < len; i++) {
 		tx[i] = 0;
 	}
 	tx[0] = 0xf1;
@@ -349,7 +349,7 @@ gt_clear_sync(void)
 static bool
 gt_dev_confirm(void)
 {
-	uint8_t tx[16], rx[16];
+	uint8_t tx[40], rx[40];
 	for (int attempt = 0; attempt < 3; attempt++) {
 		tx[0] = 0xf0;
 		tx[1] = 0x00;
@@ -362,7 +362,7 @@ gt_dev_confirm(void)
 		spi_xfer(tx, NULL, 13);
 		gt_wait(5);
 
-		spi_read_req(tx, 0x10000);
+		spi_read_req(tx, sizeof(tx), 0x10000);
 		spi_xfer(tx, rx, 16);
 		int ok = 1;
 		for (int i = 0; i < 8; i++) {
@@ -385,7 +385,7 @@ gt_version_ok(void)
 	uint8_t tx[40], rx[40];
 	uint32_t sum = 0;
 
-	spi_read_req(tx, 0x10014);
+	spi_read_req(tx, sizeof(tx), 0x10014);
 	spi_xfer(tx, rx, 36);
 	for (int i = 0; i < 26; i++) {
 		sum += rx[8 + i];
@@ -528,7 +528,7 @@ gt_frame(void)
 	const uint8_t *d = &rx[8];
 	uint32_t nz = 0, n, mask = 0, sum = 0;
 
-	spi_read_req(tx, 0x10308);
+	spi_read_req(tx, sizeof(tx), 0x10308);
 	spi_xfer(tx, rx, 34);
 
 	for (int i = 0; i < 8; i++) {

@@ -763,11 +763,14 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
     int btn_ok   = valid_log && (sfind_n(log, log_len, "mtk_buttons: ready") || sfind_n(log, log_len, "virtio-input:"));
     int touch_ok = valid_log && (sfind_n(log, log_len, "mtk_touch: detected") || sfind_n(log, log_len, "virtio-input: tablet"));
     int ufs_ok   = valid_log && sfind_n(log, log_len, "mtk_ufs_ro: LUN2 GPT OK");
+    int real_panic = valid_log && sfind_n(log, log_len, "panic(") && !sfind_n(log, log_len, "INPUT SUMMARY:") && !sfind_n(log, log_len, "mtk_ram_diag:");
 
-    if (hello_ok) {
-        ui_line(ctx, 0, "RUBY v0.53b: XNU SMP+INPUT+UFS PASS!", COL_GREEN);
+    if (hello_ok && !real_panic) {
+        ui_line(ctx, 0, "RUBY v0.53c: XNU SMP+INPUT+UFS PASS!", COL_GREEN);
+    } else if (real_panic) {
+        ui_line(ctx, 0, "RUBY v0.53c: XNU PANIC (SEE LOG)", COL_RED);
     } else {
-        ui_line(ctx, 0, "RUBY v0.53b: XNU RETURNED (SEE LOG)", COL_YELLOW);
+        ui_line(ctx, 0, "RUBY v0.53c: XNU RETURNED (SEE LOG)", COL_YELLOW);
     }
     ui_hex(ctx, 1, "RAMbase: ", ctx->xnu_phys_base, COL_WHITE);
     ui_hex(ctx, 2, "RAMsize: ", ctx->xnu_mem_size, ctx->ram_probe_fail_pa ? COL_YELLOW : COL_GREEN);
@@ -865,7 +868,7 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
         }
         /* When PID 1 succeeded and exited intentionally, trim expected "init died" panic dump
          * so the live Hello + kernel boot lines stay visible on screen. */
-        if (hello_ok) {
+        if (hello_ok && !real_panic) {
             const char *marker = "--- panic buffer ---";
             uint32_t mlen = slen(marker);
             for (uint64_t i = 0; i + mlen <= text_end; i++) {
@@ -1119,7 +1122,7 @@ efi_status EFIAPI efi_main(efi_handle image, efi_system_table *st) {
         ctx.fb_pitch = (uint64_t)ctx.fb_stride_px * 4ULL;
     }
     fb_clear(&ctx);
-    ui_line(&ctx, 0, "ruby v0.53b - HakiOS SMP + Input + RO-UFS + RAMdiag", COL_GREEN);
+    ui_line(&ctx, 0, "ruby v0.53c - HakiOS SMP + Input + RO-UFS + RAMdiag", COL_GREEN);
 
     uint64_t el = 0;
     __asm__ volatile("mrs %0, CurrentEL" : "=r"(el));
