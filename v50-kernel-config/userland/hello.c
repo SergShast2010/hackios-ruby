@@ -253,6 +253,9 @@ start(void)
 	put_u64(fd, touch_cnt);
 	put(fd, "\n");
 
+	long rdfd = syscall3_err(SYS_open, (long)"/dev/hakios-ramdiag", 0, 0);
+	if (rdfd >= 0) (void)syscall3_err(6, rdfd, 0, 0);
+
 	(void)syscall3_err(SYS_exit, 0, 0, 0);
 	for (;;) {}
 }

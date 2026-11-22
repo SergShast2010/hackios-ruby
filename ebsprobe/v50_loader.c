@@ -765,9 +765,9 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
     int ufs_ok   = valid_log && sfind_n(log, log_len, "mtk_ufs_ro: LUN2 GPT OK");
 
     if (hello_ok) {
-        ui_line(ctx, 0, "RUBY v0.53: XNU SMP+INPUT+UFS+RAM PASS!", COL_GREEN);
+        ui_line(ctx, 0, "RUBY v0.53b: XNU SMP+INPUT+UFS PASS!", COL_GREEN);
     } else {
-        ui_line(ctx, 0, "RUBY v0.53: XNU RETURNED (SEE LOG)", COL_YELLOW);
+        ui_line(ctx, 0, "RUBY v0.53b: XNU RETURNED (SEE LOG)", COL_YELLOW);
     }
     ui_hex(ctx, 1, "RAMbase: ", ctx->xnu_phys_base, COL_WHITE);
     ui_hex(ctx, 2, "RAMsize: ", ctx->xnu_mem_size, ctx->ram_probe_fail_pa ? COL_YELLOW : COL_GREEN);
@@ -805,7 +805,7 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
         if (reason != 1) {
             uint32_t shown = 0;
             uint64_t scan = 0;
-            while (scan < log_len && shown < 14u && y_start + 56u < ctx->fb_height) {
+            while (scan < log_len && shown < 20u && y_start + 56u < ctx->fb_height) {
                 uint64_t ls = scan;
                 while (scan < log_len && log[scan] != '\n') scan++;
                 uint64_t ll = scan - ls;
@@ -813,6 +813,7 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
                 if (ll > 0 && (sfind_n(log + ls, ll, "mtk_buttons:") ||
                                sfind_n(log + ls, ll, "mtk_touch:") ||
                                sfind_n(log + ls, ll, "mtk_ufs_ro:") ||
+                               sfind_n(log + ls, ll, "mtk_ram_diag:") ||
                                sfind_n(log + ls, ll, "virtio-input:"))) {
                     char lbuf[96];
                     uint32_t ln = 0;
@@ -822,7 +823,7 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
                         if (c >= 32 && c < 127) lbuf[ln++] = c;
                     }
                     lbuf[ln] = 0;
-                    uint32_t col = (sfind_n(lbuf, ln, "detected") || sfind_n(lbuf, ln, "ready") || sfind_n(lbuf, ln, "GPT OK")) ? COL_GREEN : COL_CYAN;
+                    uint32_t col = (sfind_n(lbuf, ln, "detected") || sfind_n(lbuf, ln, "ready") || sfind_n(lbuf, ln, "GPT OK") || sfind_n(lbuf, ln, "CLEAN")) ? COL_GREEN : (sfind_n(lbuf, ln, "SERROR") ? COL_RED : COL_CYAN);
                     fb_draw_text(ctx, 16u, y_start, 2u, lbuf, col, 0u);
                     y_start += 26u;
                     shown++;
@@ -1118,7 +1119,7 @@ efi_status EFIAPI efi_main(efi_handle image, efi_system_table *st) {
         ctx.fb_pitch = (uint64_t)ctx.fb_stride_px * 4ULL;
     }
     fb_clear(&ctx);
-    ui_line(&ctx, 0, "ruby v0.53 - HakiOS SMP + Goodix + RO-UFS + RAM", COL_GREEN);
+    ui_line(&ctx, 0, "ruby v0.53b - HakiOS SMP + Input + RO-UFS + RAMdiag", COL_GREEN);
 
     uint64_t el = 0;
     __asm__ volatile("mrs %0, CurrentEL" : "=r"(el));

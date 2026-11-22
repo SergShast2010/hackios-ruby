@@ -18,10 +18,17 @@
 #include <mach/mach_types.h>
 #include <mach/vm_param.h>
 #include <pexpert/pexpert.h>
+#include <machine/machine_routines.h>
+#include <miscfs/devfs/devfs.h>
+#include <sys/conf.h>
 #include <sys/systm.h>
+#include <vm/vm_kern.h>
+#include <vm/pmap.h>
 
 extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+extern vm_offset_t ml_io_map_unmappable(vm_offset_t phys_addr, vm_size_t size, unsigned int flags);
 extern uint64_t kvtophys(vm_offset_t va);
+extern void loader_return(void);
 
 #define UFS_BASE_PA     0x11270000UL
 #define UFS_MMIO_SIZE   0x1000UL
@@ -313,9 +320,106 @@ ufs_parse_gpt(uint32_t lun, uint32_t blk_sz)
 	printf("mtk_ufs_ro: LUN%u scanned=%u active_parts=%u (READ-ONLY)\n", lun, scan, valid);
 }
 
+
+/* --- Post-input high-PA (>4 GiB) cacheable Write-Back SError diagnostic ---
+ * Triggered ONLY when userland opens /dev/hakios-ramdiag (after input test)
+ * and boot-arg mtk_ram_diag=1 is present. Masks DAIF.A and polls ISR_EL1.A
+ * after each mapped 4K probe; on SError calls loader_return() cleanly without
+ * panicking so all button/touch/UFS/RAM results stay visible on screen.
+ */
+static int ramdiag_ran;
+
+static int
+ramdiag_open(__unused dev_t dev, __unused int flags, __unused int type, __unused struct proc *proc)
+{
+	int enabled = 0;
+	if (ramdiag_ran || !PE_parse_boot_argn("mtk_ram_diag", &enabled, sizeof(enabled)) || enabled != 1) {
+		return 0;
+	}
+	ramdiag_ran = 1;
+
+	static const uint64_t addrs[] = {
+		0x100000000ULL,
+		0x13D000000ULL,
+		0x140000000ULL,
+		0x180000000ULL,
+		0x1C0000000ULL,
+		0x1FE000000ULL,
+		0x200000000ULL,
+		0x220000000ULL,
+		0x23D000000ULL,
+	};
+
+	uint64_t saved_daif = 0, pre_isr = 0;
+	__asm__ volatile("mrs %0, daif" : "=r"(saved_daif));
+	__asm__ volatile("msr daifset, #4; isb" ::: "memory");
+	__asm__ volatile("dsb sy; isb; mrs %0, isr_el1" : "=r"(pre_isr));
+
+	for (unsigned i = 0; i < sizeof(addrs) / sizeof(addrs[0]); i++) {
+		uint64_t pa = addrs[i];
+		vm_offset_t va = ml_io_map_unmappable((vm_offset_t)pa, 0x4000, VM_WIMG_COPYBACK);
+		if (!va) {
+			printf("mtk_ram_diag: map fail pa=0x%llx\n", (unsigned long long)pa);
+			continue;
+		}
+		volatile uint64_t *ptr = (volatile uint64_t *)va;
+		uint64_t saved[8];
+		for (int k = 0; k < 8; k++) {
+			saved[k] = ptr[k];
+		}
+		__asm__ volatile("dsb sy; dc civac, %0; dsb sy; isb" :: "r"(va) : "memory");
+		uint64_t isr = 0;
+		__asm__ volatile("mrs %0, isr_el1" : "=r"(isr));
+		if (isr & 0x100ULL) {
+			printf("mtk_ram_diag: SERROR READ pa=0x%llx isr=0x%llx pre=0x%llx\n",
+			    (unsigned long long)pa, (unsigned long long)isr, (unsigned long long)pre_isr);
+			loader_return();
+			return 0;
+		}
+		for (int k = 0; k < 8; k++) {
+			ptr[k] = saved[k];
+		}
+		__asm__ volatile("dsb sy; dc civac, %0; dsb sy; isb" :: "r"(va) : "memory");
+		__asm__ volatile("mrs %0, isr_el1" : "=r"(isr));
+		if (isr & 0x100ULL) {
+			printf("mtk_ram_diag: SERROR WRITE pa=0x%llx isr=0x%llx pre=0x%llx\n",
+			    (unsigned long long)pa, (unsigned long long)isr, (unsigned long long)pre_isr);
+			loader_return();
+			return 0;
+		}
+	}
+
+	printf("mtk_ram_diag: ALL 9 HIGH-PA WBACK CLEAN (0x100000000..0x23D000000 pre=0x%llx)\n",
+	    (unsigned long long)pre_isr);
+	__asm__ volatile("msr daif, %0; isb" :: "r"(saved_daif) : "memory");
+	return 0;
+}
+
+static int
+ramdiag_close(__unused dev_t dev, __unused int flags, __unused int type, __unused struct proc *proc)
+{
+	return 0;
+}
+
+static const struct cdevsw ramdiag_cdevsw = {
+	.d_open = ramdiag_open, .d_close = ramdiag_close, .d_read = eno_rdwrt, .d_write = eno_rdwrt,
+	.d_ioctl = eno_ioctl, .d_stop = eno_stop, .d_reset = eno_reset, .d_select = eno_select,
+	.d_mmap = eno_mmap, .d_strategy = eno_strat, .d_type = 0
+};
+
+static void
+ramdiag_register(void)
+{
+	int major = cdevsw_add(-1, &ramdiag_cdevsw);
+	if (major >= 0) {
+		(void)devfs_make_node(makedev(major, 0), DEVFS_CHAR, UID_ROOT, GID_WHEEL, 0666, "hakios-ramdiag");
+	}
+}
+
 void
 hakios_mtk_ufs_ro_init(void)
 {
+	ramdiag_register();
 	int enabled = 0;
 	if (!PE_parse_boot_argn("mtk_ufs_ro", &enabled, sizeof(enabled)) || enabled != 1) {
 		return;

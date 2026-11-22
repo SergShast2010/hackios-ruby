@@ -17,7 +17,7 @@
 #define V50_XNU_MIN_WIN     0x10000000ULL /* 256 MiB */
 #define V50_XNU_MAX_WIN     0x180000000ULL /* 6 GiB: matches XNU bootstrap page tables */
 #ifndef V50_RUBY_ALLOW_HIGH_RAM
-#define V50_RUBY_ALLOW_HIGH_RAM 1 /* v0.53: use >4 GiB DRAM with physical SError-safe probe + <4 GiB fallback */
+#define V50_RUBY_ALLOW_HIGH_RAM 0 /* v0.53: use >4 GiB DRAM with physical SError-safe probe + <4 GiB fallback */
 #endif
 #define V50_MAX_RANGES      256u
 #define V50_MAX_CPUS        8u
