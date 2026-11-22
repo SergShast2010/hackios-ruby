@@ -17,7 +17,7 @@
 #define V50_XNU_MIN_WIN     0x10000000ULL /* 256 MiB */
 #define V50_XNU_MAX_WIN     0x180000000ULL /* 6 GiB: matches XNU bootstrap page tables */
 #ifndef V50_RUBY_ALLOW_HIGH_RAM
-#define V50_RUBY_ALLOW_HIGH_RAM 0 /* v0.51b: isolate 8-core SMP on proven <4 GiB Rank 0 RAM first */
+#define V50_RUBY_ALLOW_HIGH_RAM 1 /* v0.53: use >4 GiB DRAM with physical SError-safe probe + <4 GiB fallback */
 #endif
 #define V50_MAX_RANGES      256u
 #define V50_MAX_CPUS        8u
@@ -30,6 +30,8 @@ struct v50_range {
 struct v50_ram_window {
     uint64_t base;
     uint64_t size;
+    uint64_t fallback_base;
+    uint64_t fallback_size;
     uint64_t total_mblock_bytes;
     uint64_t mblock_count;
     uint64_t reserved_count;
@@ -151,7 +153,7 @@ static uint32_t V50FindRubyRamWindow(const unsigned char *f, uint64_t cap, struc
     uint32_t mb_seen = 0;
 
     if (!out) return 1;
-    out->base = out->size = out->total_mblock_bytes = 0;
+    out->base = out->size = out->fallback_base = out->fallback_size = out->total_mblock_bytes = 0;
     out->mblock_count = out->reserved_count = out->fdt_bytes = 0;
     out->error = 1;
     if (!v50_fdt_header_ok(f, cap, &total, &so, &ss, &to, &ts, &ro)) {
@@ -267,11 +269,23 @@ static uint32_t V50FindRubyRamWindow(const unsigned char *f, uint64_t cap, struc
         v50_subtract_one(free_r, &fcnt, res_r[i].start, res_r[i].end);
     }
 
-    /* Pick the largest 32 MiB-aligned clean window (up to V50_XNU_MAX_WIN, incl. > 4 GiB DRAM). */
+    /* Pick the largest 32 MiB-aligned clean window (up to V50_XNU_MAX_WIN) plus best <4 GiB fallback. */
     uint64_t best_base = 0, best_size = 0;
+    uint64_t fb_base = 0, fb_size = 0;
     for (uint32_t i = 0; i < fcnt; i++) {
         uint64_t s = (free_r[i].start + V50_XNU_ALIGN - 1) & ~(V50_XNU_ALIGN - 1);
         uint64_t e = free_r[i].end & ~(V50_XNU_ALIGN - 1);
+        if (s < 0x100000000ULL) {
+            uint64_t le = (e > 0x100000000ULL) ? 0x100000000ULL : e;
+            le &= ~(V50_XNU_ALIGN - 1);
+            if (le > s) {
+                uint64_t lsz = le - s;
+                if (lsz >= V50_XNU_MIN_WIN && lsz > fb_size) {
+                    fb_base = s;
+                    fb_size = lsz;
+                }
+            }
+        }
 #if !V50_RUBY_ALLOW_HIGH_RAM
         if (s >= 0x100000000ULL) continue;
         if (e > 0x100000000ULL) e = 0x100000000ULL;
@@ -301,6 +315,8 @@ static uint32_t V50FindRubyRamWindow(const unsigned char *f, uint64_t cap, struc
 
     out->base = best_base;
     out->size = best_size;
+    out->fallback_base = fb_base;
+    out->fallback_size = fb_size;
     out->error = 0;
     return 0;
 }

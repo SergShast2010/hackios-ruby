@@ -1,10 +1,16 @@
-/* v0.50 AArch64 EL1 physical transition, XNU handoff and return stub.
- * Identity-mapped UEFI entry -> clean+invalidate caches -> MMU off -> XNU -> return with log.
+/* v0.53 AArch64 EL1 physical transition, SError-safe RAM probe, XNU handoff and return stub.
+ * Identity-mapped UEFI entry -> clean+invalidate caches -> MMU off -> probe RAM -> XNU -> return with log.
  */
 .data
 .p2align 3
 .globl v50_saved_ctx
 v50_saved_ctx:
+    .quad 0
+v50_probe_active:
+    .quad 0
+v50_probe_hit:
+    .quad 0
+v50_probe_esr:
     .quad 0
 
 .text
@@ -97,6 +103,50 @@ V50EnterPhysical:
     b    V50BootPhysical
 
 .p2align 4
+.globl V50ProbeRam64
+/* uint64_t V50ProbeRam64(uint64_t pa, uint64_t *esr_out)
+ * Must be called with MMU OFF under V50OwnVectors. Tests 8-byte read + write-back
+ * and catches any synchronous External Abort or asynchronous SError cleanly.
+ * Returns 0 if clean, 1 if faulted (and stores ESR_EL1 in *esr_out if non-NULL).
+ */
+V50ProbeRam64:
+    msr  daifset, #15
+    adrp x2, v50_probe_active
+    add  x2, x2, :lo12:v50_probe_active
+    str  xzr, [x2, #8]              /* v50_probe_hit = 0 */
+    str  xzr, [x2, #16]             /* v50_probe_esr = 0 */
+    mov  x3, #1
+    str  x3, [x2]                   /* v50_probe_active = 1 */
+    dsb  sy
+    isb
+
+    ldr  x9, [x0]
+    dsb  sy
+    str  x9, [x0]
+    dsb  sy
+    isb
+
+    /* Briefly unmask SError (DAIF.A = bit 2 of daifclr immediate #4). */
+    msr  daifclr, #4
+    isb
+    nop
+    nop
+    nop
+    nop
+    dsb  sy
+    msr  daifset, #4
+    isb
+
+    str  xzr, [x2]                  /* v50_probe_active = 0 */
+    dsb  sy
+    ldr  x0, [x2, #8]               /* return v50_probe_hit */
+    cbz  x1, 1f
+    ldr  x9, [x2, #16]
+    str  x9, [x1]
+1:
+    ret
+
+.p2align 4
 .globl V50JumpXnu
 /* void V50JumpXnu(uint64_t entry_pa, uint64_t boot_args_pa) */
 V50JumpXnu:
@@ -171,6 +221,32 @@ V50SLOT 14
 V50SLOT 15
 
 V50OwnException:
+    /* Fast path for V50ProbeRam64: record fault and return cleanly with SError masked. */
+    adrp x10, v50_probe_active
+    add  x10, x10, :lo12:v50_probe_active
+    ldr  x11, [x10]
+    cbz  x11, .Lv50_real_exc
+
+    mov  x11, #1
+    str  x11, [x10, #8]             /* v50_probe_hit = 1 */
+    mrs  x11, esr_el1
+    str  x11, [x10, #16]            /* v50_probe_esr = esr_el1 */
+    /* If synchronous (vector 0 or 4), skip the faulting ldr/str instruction. */
+    and  x12, x17, #3
+    cbnz x12, .Lv50_probe_serror
+    mrs  x11, elr_el1
+    add  x11, x11, #4
+    msr  elr_el1, x11
+.Lv50_probe_serror:
+    /* Keep A (SError) masked on return from exception. */
+    mrs  x11, spsr_el1
+    orr  x11, x11, #0x100
+    msr  spsr_el1, x11
+    dsb  sy
+    isb
+    eret
+
+.Lv50_real_exc:
     msr  daifset, #15
     mrs  x14, sctlr_el1
     bic  x14, x14, #1

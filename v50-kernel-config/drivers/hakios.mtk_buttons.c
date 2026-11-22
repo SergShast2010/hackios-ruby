@@ -1,19 +1,19 @@
 /*
- * Physical buttons on MediaTek MT6877 (Redmi Note 12 Pro 5G / ruby).
+ * Physical buttons on Redmi Note 12 Pro 5G (ruby, MediaTek MT6877).
+ * Hardware layout verified on live ruby (adapted from lky005/ruby-ios-bringup):
+ *   - Volume Down : SoC keypad controller KPD (0x10010000) KP_MEM1 bit 0 (active low)
+ *   - Power / Lock: PMIC MT6359 TOPSTATUS (0x002a) bit 1 PWRKEY_DEB (active low)
+ *   - Volume Up   : PMIC MT6359 TOPSTATUS (0x002a) bit 3 HOMEKEY_DEB (active low)
  *
- * The MediaTek keypad controller (kp@10010000) reflects hardware key state
- * directly in read-only memory registers KP_MEM1..KP_MEM5 (active-low bits).
- * From ruby's live DTB (kp@10010000):
- *   - KP_MEM1 bit 0  (key 0,  0x72 KEY_VOLUMEDOWN): Volume Down
- *   - KP_MEM1 bit 8  (key 8,  0x74 KEY_POWER):      Power / Lock
- *   - KP_MEM2 bit 1  (key 17, 0x73 KEY_VOLUMEUP):   Volume Up
+ * Read-only on PMIC: TOPSTATUS is polled via pwrap SWINF (0x10026000) without writing
+ * any PMIC register. Two consecutive matching 20 ms samples debounce contact bounce.
+ * Holding Volume Up + Volume Down for 1.5 s invokes loader_return() cleanly.
  *
- * Activated by boot-arg buttons=2. Optional keylog=1 logs transitions and
- * any unexpected bit changes across KP_MEM1..KP_MEM3 for diagnostics.
- * Holding VolDown + VolUp for 1.5s triggers loader_return() cleanly.
+ * Boot args: buttons=2 [keylog=1].
  */
 #include <kern/clock.h>
-#include <kern/thread_call.h>
+#include <kern/sched_prim.h>
+#include <kern/thread.h>
 #include <libkern/libkern.h>
 #include <mach/mach_types.h>
 #include <mach/vm_param.h>
@@ -22,142 +22,197 @@
 #include <sys/systm.h>
 
 extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+extern kern_return_t kernel_thread_start(thread_continue_t, void *, thread_t *);
+extern void thread_deallocate(thread_t);
 extern void loader_return(void);
 
-#define MTK_KPD_PHYS      0x10010000UL
-#define MTK_KPD_SIZE      0x1000UL
-#define KP_STA            0x0000
-#define KP_MEM1           0x0004
-#define KP_MEM2           0x0008
-#define KP_MEM3           0x000c
-#define KP_MEM4           0x0010
-#define KP_MEM5           0x0014
+#define RK_KPD_PA          0x10010000UL
+#define RK_KPD_MEM1        0x0004u
 
-#define KPD_POLL_MS       20
-#define KPD_COMBO_TICKS   (1500 / KPD_POLL_MS)
+#define RK_PWRAP_PA        0x10026000UL
+#define RK_MMIO_SIZE       0x1000UL
+#define RK_PWRAP_ACC       0x0880u
+#define RK_PWRAP_RDATA     0x0894u
+#define RK_PWRAP_VLDCLR    0x08a4u
+#define RK_PWRAP_STA       0x08a8u
 
-/* ruby live-DTB key bits (active low in KP_MEM1..KP_MEM2) */
-#define BIT_VOLDOWN       0u    /* KP_MEM1 bit 0  */
-#define BIT_POWER         8u    /* KP_MEM1 bit 8  */
-#define BIT_VOLUP         17u   /* KP_MEM2 bit 1  */
+#define RK_SWINF_FSM(v)    (((v) >> 1) & 7u)
+#define RK_SWINF_IDLE      0u
+#define RK_SWINF_VLDCLR    6u
+#define RK_SWINF_INIT      (1u << 15)
 
-static volatile uint16_t *kpd_regs;
-static thread_call_t      kpd_call;
-static uint32_t           kpd_prev_bits;
-static uint16_t           kpd_prev_mem3;
-static int                kpd_log;
-static unsigned           kpd_combo_ticks;
+#define RK_MT6359_TOPSTATUS  0x002au
+#define RK_TOP_PWRKEY_DEB    (1u << 1)
+#define RK_TOP_HOMEKEY_DEB   (1u << 3)
 
-static inline uint16_t
-kpd_rd16(unsigned off)
+#define RK_POLL_MS         20u
+#define RK_COMBO_TICKS     (1500u / RK_POLL_MS)
+
+struct rk_key {
+	const char *name;
+	uint32_t code;
+	bool down;
+	bool seen;
+};
+
+static struct rk_key rk_keys[3] = {
+	{ "power",   HAKIOS_BUTTON_LOCK,        false, false },
+	{ "volup",   HAKIOS_BUTTON_VOLUME_UP,   false, false },
+	{ "voldown", HAKIOS_BUTTON_VOLUME_DOWN, false, false },
+};
+
+static vm_offset_t rk_kpd, rk_pwrap;
+static bool rk_started;
+static int rk_log;
+static int rk_sleep_chan;
+static unsigned rk_errors;
+static unsigned rk_combo_ticks;
+
+static inline uint32_t
+rk_rd32(vm_offset_t base, uint32_t off)
 {
-	uint16_t v = *(volatile uint16_t *)((uintptr_t)kpd_regs + off);
-	__asm__ volatile("dsb ld" ::: "memory");
+	uint32_t v = *(volatile uint32_t *)(base + off);
+	__asm__ volatile("dmb oshld" ::: "memory");
 	return v;
 }
 
-static void
-kpd_schedule(void)
+static inline uint16_t
+rk_rd16(vm_offset_t base, uint32_t off)
 {
-	uint64_t deadline;
-	clock_interval_to_deadline(KPD_POLL_MS, NSEC_PER_MSEC, &deadline);
-	thread_call_enter_delayed(kpd_call, deadline);
+	uint16_t v = *(volatile uint16_t *)(base + off);
+	__asm__ volatile("dmb oshld" ::: "memory");
+	return v;
 }
 
-static void
-kpd_report_mapped(unsigned bit, bool down)
+static inline void
+rk_wr32(vm_offset_t base, uint32_t off, uint32_t v)
 {
-	uint32_t btn = 0;
-	const char *name = NULL;
+	__asm__ volatile("dmb oshst" ::: "memory");
+	*(volatile uint32_t *)(base + off) = v;
+	__asm__ volatile("dsb osh" ::: "memory");
+}
 
-	if (bit == BIT_VOLDOWN) {
-		btn = HAKIOS_BUTTON_VOLUME_DOWN;
-		name = "voldown";
-	} else if (bit == BIT_POWER) {
-		btn = HAKIOS_BUTTON_LOCK;
-		name = "lock";
-	} else if (bit == BIT_VOLUP) {
-		btn = HAKIOS_BUTTON_VOLUME_UP;
-		name = "volup";
-	} else {
-		if (kpd_log) {
-			printf("mtk_buttons: raw bit %u %s\n", bit, down ? "down" : "up");
+static bool
+rk_pwrap_wait(uint32_t fsm)
+{
+	for (uint32_t i = 0; i < 10000u; i++) {
+		if (RK_SWINF_FSM(rk_rd32(rk_pwrap, RK_PWRAP_STA)) == fsm) {
+			return true;
 		}
-		return;
 	}
+	return false;
+}
 
-	if (kpd_log) {
-		printf("mtk_buttons: %s %s\n", name, down ? "down" : "up");
+static bool
+rk_pmic_read(uint16_t reg, uint16_t *val)
+{
+	if (!rk_pwrap) {
+		return false;
 	}
-	hakios_touch_post(down ? HAKIOS_BUTTON_DOWN : HAKIOS_BUTTON_UP, btn, 0, 0);
+	uint32_t sta = rk_rd32(rk_pwrap, RK_PWRAP_STA);
+	if (!(sta & RK_SWINF_INIT)) {
+		return false;
+	}
+	if (!rk_pwrap_wait(RK_SWINF_IDLE)) {
+		return false;
+	}
+	rk_wr32(rk_pwrap, RK_PWRAP_ACC, reg);
+	if (!rk_pwrap_wait(RK_SWINF_VLDCLR)) {
+		return false;
+	}
+	uint32_t rd = rk_rd32(rk_pwrap, RK_PWRAP_RDATA);
+	*val = (uint16_t)(rd & 0xffffu);
+	rk_wr32(rk_pwrap, RK_PWRAP_VLDCLR, 1u);
+	return true;
 }
 
 static void
-kpd_poll(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
+rk_thread(__unused void *arg, __unused wait_result_t result)
 {
-	uint16_t m1 = kpd_rd16(KP_MEM1);
-	uint16_t m2 = kpd_rd16(KP_MEM2);
-	uint16_t m3 = kpd_rd16(KP_MEM3);
-	/* Active low: invert so 1 = pressed */
-	uint32_t now = (~((uint32_t)m1 | ((uint32_t)m2 << 16))) & 0xffffffffu;
-	uint32_t changed = now ^ kpd_prev_bits;
+	for (;;) {
+		uint16_t mem1 = 0xffffu, top = 0xffffu;
+		bool pmic_ok = rk_pmic_read(RK_MT6359_TOPSTATUS, &top);
+		bool now[3];
 
-	if (changed) {
-		for (unsigned b = 0; b < 32; b++) {
-			if (changed & (1u << b)) {
-				kpd_report_mapped(b, (now & (1u << b)) != 0);
+		if (rk_kpd) {
+			mem1 = rk_rd16(rk_kpd, RK_KPD_MEM1);
+		}
+		now[0] = pmic_ok ? !(top & RK_TOP_PWRKEY_DEB) : rk_keys[0].down;
+		now[1] = pmic_ok ? !(top & RK_TOP_HOMEKEY_DEB) : rk_keys[1].down;
+		now[2] = rk_kpd && !(mem1 & 1u);
+
+		if (pmic_ok) {
+			rk_errors = 0;
+		} else if ((rk_errors++ % 250u) == 0u) {
+			printf("mtk_buttons: PMIC read failed\n");
+		}
+
+		for (unsigned i = 0; i < 3; i++) {
+			if (now[i] == rk_keys[i].seen && now[i] != rk_keys[i].down) {
+				rk_keys[i].down = now[i];
+				if (rk_log) {
+					printf("mtk_buttons: %s %s (mem1=%04x top=%04x)\n",
+					    rk_keys[i].name, now[i] ? "down" : "up", mem1, top);
+				}
+				hakios_touch_post(now[i] ? HAKIOS_BUTTON_DOWN : HAKIOS_BUTTON_UP,
+				    rk_keys[i].code, 0, 0);
 			}
+			rk_keys[i].seen = now[i];
 		}
-		kpd_prev_bits = now;
-	}
 
-	if (m3 != kpd_prev_mem3) {
-		if (kpd_log) {
-			printf("mtk_buttons: mem3 0x%04x -> 0x%04x\n", kpd_prev_mem3, m3);
+		if (rk_keys[1].down && rk_keys[2].down) {
+			if (++rk_combo_ticks == RK_COMBO_TICKS) {
+				printf("mtk_buttons: VolUp+VolDown hold -> loader_return\n");
+				loader_return();
+				return;
+			}
+		} else {
+			rk_combo_ticks = 0;
 		}
-		kpd_prev_mem3 = m3;
-	}
 
-	/* Clean exit combo: VolDown + VolUp held for 1.5s */
-	if ((now & (1u << BIT_VOLDOWN)) && (now & (1u << BIT_VOLUP))) {
-		if (++kpd_combo_ticks == KPD_COMBO_TICKS) {
-			printf("mtk_buttons: VolDown+VolUp hold -> loader_return\n");
-			loader_return();
-			return;
-		}
-	} else {
-		kpd_combo_ticks = 0;
+		uint64_t deadline;
+		clock_interval_to_deadline(RK_POLL_MS, NSEC_PER_MSEC, &deadline);
+		(void)assert_wait_deadline(&rk_sleep_chan, THREAD_UNINT, deadline);
+		thread_block(THREAD_CONTINUE_NULL);
 	}
-
-	kpd_schedule();
 }
 
 void
 hakios_mtk_buttons_init(void)
 {
 	int mode = 0;
+	if (rk_started) {
+		return;
+	}
 	if (!PE_parse_boot_argn("buttons", &mode, sizeof(mode)) || mode != 2) {
 		return;
 	}
-	PE_parse_boot_argn("keylog", &kpd_log, sizeof(kpd_log));
+	rk_started = true;
+	PE_parse_boot_argn("keylog", &rk_log, sizeof(rk_log));
 
-	vm_offset_t va = ml_io_map(MTK_KPD_PHYS, MTK_KPD_SIZE);
-	if (!va) {
-		printf("mtk_buttons: ml_io_map(0x%lx) failed\n", MTK_KPD_PHYS);
+	rk_kpd = ml_io_map(RK_KPD_PA, RK_MMIO_SIZE);
+	rk_pwrap = ml_io_map(RK_PWRAP_PA, RK_MMIO_SIZE);
+	if (!rk_kpd && !rk_pwrap) {
+		printf("mtk_buttons: MMIO map failed\n");
 		return;
 	}
-	kpd_regs = (volatile uint16_t *)va;
 
-	uint16_t sta = kpd_rd16(KP_STA);
-	uint16_t m1  = kpd_rd16(KP_MEM1);
-	uint16_t m2  = kpd_rd16(KP_MEM2);
-	uint16_t m3  = kpd_rd16(KP_MEM3);
-	kpd_prev_bits = (~((uint32_t)m1 | ((uint32_t)m2 << 16))) & 0xffffffffu;
-	kpd_prev_mem3 = m3;
+	uint16_t top = 0xffffu;
+	bool pmic_ok = rk_pmic_read(RK_MT6359_TOPSTATUS, &top);
+	uint16_t mem1 = rk_kpd ? rk_rd16(rk_kpd, RK_KPD_MEM1) : 0xffffu;
 
-	printf("mtk_buttons: ready (KPD @ 0x%lx sta=0x%04x mem1=0x%04x mem2=0x%04x mem3=0x%04x)\n",
-	    MTK_KPD_PHYS, sta, m1, m2, m3);
+	/* Seed initial state so already-held keys don't emit a bogus edge. */
+	rk_keys[0].down = rk_keys[0].seen = pmic_ok ? !(top & RK_TOP_PWRKEY_DEB) : false;
+	rk_keys[1].down = rk_keys[1].seen = pmic_ok ? !(top & RK_TOP_HOMEKEY_DEB) : false;
+	rk_keys[2].down = rk_keys[2].seen = rk_kpd && !(mem1 & 1u);
 
-	kpd_call = thread_call_allocate(kpd_poll, NULL);
-	kpd_schedule();
+	printf("mtk_buttons: ready (kpd=%d pwrap=%d top_ok=%d top=0x%04x mem1=0x%04x)\n",
+	    rk_kpd != 0, rk_pwrap != 0, pmic_ok ? 1 : 0, top, mem1);
+
+	thread_t th;
+	if (kernel_thread_start(rk_thread, NULL, &th) == KERN_SUCCESS) {
+		thread_deallocate(th);
+	} else {
+		printf("mtk_buttons: thread start failed\n");
+	}
 }

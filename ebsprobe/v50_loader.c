@@ -115,6 +115,11 @@ struct v50_ctx {
     uint64_t gicr, gicr_size;
     uint64_t xnu_phys_base;
     uint64_t xnu_mem_size;
+    uint64_t fallback_phys_base;
+    uint64_t fallback_mem_size;
+    uint64_t ram_orig_size;
+    uint64_t ram_probe_fail_pa;
+    uint64_t ram_probe_esr;
     uint64_t pram_pa;
     uint64_t payload_pa;
     uint64_t payload_size;
@@ -134,6 +139,7 @@ extern void V50EnterPhysical(struct v50_ctx *ctx, uint64_t stack_top) __attribut
 extern void V50JumpXnu(uint64_t entry_pa, uint64_t boot_args_pa) __attribute__((noreturn));
 extern void V50XnuReturn(void);
 extern int64_t V50PsciCall(uint64_t fn, uint64_t a1, uint64_t a2, uint64_t a3, uint32_t use_hvc);
+extern uint64_t V50ProbeRam64(uint64_t pa, uint64_t *esr_out);
 
 static efi_text_output *g_con;
 
@@ -561,7 +567,55 @@ __attribute__((noinline, noreturn)) void V50BootPhysical(struct v50_ctx *ctx) {
     g_con = NULL;
 
     ui_line(ctx, 13, "ExitBootServices + MMU OFF: Success", COL_GREEN);
-    ui_line(ctx, 14, "Staging XNU segments into clean RAM...", COL_YELLOW);
+
+    /* Disable MT6877 watchdog before long boot/input runs on the real phone. */
+    if (!ctx->is_qemu) {
+        *(volatile uint32_t *)(uintptr_t)0x10007000ULL = 0x22000000U;
+        __asm__ volatile("dsb sy" ::: "memory");
+    }
+
+    /* Probe every 1 MiB of the chosen XNU RAM window for hidden EMI/MPU SErrors. */
+    ctx->ram_orig_size = ctx->xnu_mem_size;
+    ctx->ram_probe_fail_pa = 0;
+    ctx->ram_probe_esr = 0;
+    if (!ctx->is_qemu && ctx->xnu_phys_base >= 0x100000000ULL) {
+        uint64_t step = 0x100000ULL; /* 1 MiB */
+        uint64_t good_end = ctx->xnu_phys_base;
+        for (uint64_t a = ctx->xnu_phys_base; a < ctx->xnu_phys_base + ctx->xnu_mem_size; a += step) {
+            uint64_t esr = 0;
+            if (V50ProbeRam64(a, &esr) || V50ProbeRam64(a + step - 8ULL, &esr)) {
+                ctx->ram_probe_fail_pa = a;
+                ctx->ram_probe_esr = esr;
+                break;
+            }
+            good_end = a + step;
+        }
+        uint64_t clean_sz = (good_end - ctx->xnu_phys_base) & ~(V50_XNU_ALIGN - 1ULL);
+        if (clean_sz < ctx->xnu_mem_size) {
+            if (clean_sz >= V50_XNU_MIN_WIN) {
+                ctx->xnu_mem_size = clean_sz;
+            } else if (ctx->fallback_phys_base && ctx->fallback_mem_size >= V50_XNU_MIN_WIN) {
+                ctx->xnu_phys_base = ctx->fallback_phys_base;
+                ctx->xnu_mem_size = ctx->fallback_mem_size;
+            } else {
+                ui_hex(ctx, 14, "RAM probe ESR: ", ctx->ram_probe_esr, COL_RED);
+                ui_halt(ctx, 15, "ERROR: High RAM SError with no fallback", ctx->ram_probe_fail_pa);
+            }
+        }
+    } else if (ctx->is_qemu) {
+        uint64_t esr = 0;
+        if (V50ProbeRam64(ctx->xnu_phys_base, &esr) ||
+            V50ProbeRam64(ctx->xnu_phys_base + ctx->xnu_mem_size - 8ULL, &esr)) {
+            ctx->ram_probe_fail_pa = ctx->xnu_phys_base;
+            ctx->ram_probe_esr = esr;
+        }
+    }
+
+    if (ctx->ram_probe_fail_pa) {
+        ui_hex(ctx, 14, "RAM cut@PA: ", ctx->ram_probe_fail_pa, COL_YELLOW);
+    } else {
+        ui_line(ctx, 14, "RAM SError probe: PASS (full window)", COL_GREEN);
+    }
 
     gic_fix_eoimode();
 
@@ -667,7 +721,7 @@ __attribute__((noinline, noreturn)) void V50BootPhysical(struct v50_ctx *ctx) {
     if (ctx->is_qemu) {
         append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "virtio_input=1 keylog=1 touchlog=1 hello_wait=6");
     } else {
-        append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "buttons=2 keylog=1 touchscreen=2 touchlog=1 hello_wait=25");
+        append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "buttons=2 keylog=1 touchscreen=2 touchlog=1 mtk_ufs_ro=1 hello_wait=25");
     }
 
     uint64_t entry_pa = ctx->entry_va + slide;
@@ -708,20 +762,21 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
     int smp_ok   = (ctx->cpu_count <= 1u) || (valid_log && sfind_n(log, log_len, "processors are running"));
     int btn_ok   = valid_log && (sfind_n(log, log_len, "mtk_buttons: ready") || sfind_n(log, log_len, "virtio-input:"));
     int touch_ok = valid_log && (sfind_n(log, log_len, "mtk_touch: detected") || sfind_n(log, log_len, "virtio-input: tablet"));
+    int ufs_ok   = valid_log && sfind_n(log, log_len, "mtk_ufs_ro: LUN2 GPT OK");
 
     if (hello_ok) {
-        ui_line(ctx, 0, "RUBY v0.52: XNU INPUT + TOUCH PASS!", COL_GREEN);
+        ui_line(ctx, 0, "RUBY v0.53: XNU SMP+INPUT+UFS+RAM PASS!", COL_GREEN);
     } else {
-        ui_line(ctx, 0, "RUBY v0.52: XNU RETURNED (SEE LOG)", COL_YELLOW);
+        ui_line(ctx, 0, "RUBY v0.53: XNU RETURNED (SEE LOG)", COL_YELLOW);
     }
-    ui_hex(ctx, 1, "reason:  ", reason, COL_WHITE);
-    ui_hex(ctx, 2, "code/ESR:", code, reason ? COL_RED : COL_WHITE);
-    ui_hex(ctx, 3, "log_len: ", log_len, COL_CYAN);
+    ui_hex(ctx, 1, "RAMbase: ", ctx->xnu_phys_base, COL_WHITE);
+    ui_hex(ctx, 2, "RAMsize: ", ctx->xnu_mem_size, ctx->ram_probe_fail_pa ? COL_YELLOW : COL_GREEN);
+    ui_hex(ctx, 3, "code/ESR:", code, reason ? COL_RED : COL_WHITE);
     if (reason == 1) {
         ui_hex(ctx, 4, "ELR:     ", elr, COL_YELLOW);
         ui_hex(ctx, 5, "FAR:     ", far, COL_YELLOW);
     } else {
-        char st[64];
+        char st[80];
         uint32_t n = 0;
         append_str(st, &n, sizeof(st), "GIC:");
         append_str(st, &n, sizeof(st), gic_ok ? "OK " : "NO ");
@@ -731,28 +786,33 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
         append_str(st, &n, sizeof(st), btn_ok ? "OK " : "NO ");
         append_str(st, &n, sizeof(st), "TCH:");
         append_str(st, &n, sizeof(st), touch_ok ? "OK " : "NO ");
-        append_str(st, &n, sizeof(st), "PID1:");
+        append_str(st, &n, sizeof(st), "UFS:");
+        append_str(st, &n, sizeof(st), ctx->is_qemu ? "-- " : (ufs_ok ? "OK " : "NO "));
+        append_str(st, &n, sizeof(st), "P1:");
         append_str(st, &n, sizeof(st), hello_ok ? "OK" : "NO");
         ui_line(ctx, 4, st, (gic_ok && bsd_ok && smp_ok && hello_ok) ? COL_GREEN : COL_YELLOW);
-        if (!hello_ok) {
+        if (ctx->ram_probe_fail_pa) {
+            ui_hex(ctx, 5, "RAMcut@: ", ctx->ram_probe_fail_pa, COL_YELLOW);
+        } else if (!hello_ok) {
             ui_hex(ctx, 5, "ISR_pre: ", ctx->isr_pre_jump, ctx->isr_pre_jump ? COL_RED : COL_WHITE);
         }
     }
 
     /* Render tail of XNU's loader_log with line wrapping so nothing clips off the right edge. */
     if (valid_log && ctx->fb_base) {
-        uint32_t y_start = (reason == 1) ? 356u : (hello_ok ? 320u : 376u);
-        /* Show mtk_buttons / mtk_touch / virtio-input init & diag lines at top of log pane */
+        uint32_t y_start = (reason == 1 || ctx->ram_probe_fail_pa || !hello_ok) ? 376u : 320u;
+        /* Show mtk_buttons / mtk_touch / mtk_ufs_ro / virtio-input diag lines at top of log pane */
         if (reason != 1) {
             uint32_t shown = 0;
             uint64_t scan = 0;
-            while (scan < log_len && shown < 9u && y_start + 56u < ctx->fb_height) {
+            while (scan < log_len && shown < 14u && y_start + 56u < ctx->fb_height) {
                 uint64_t ls = scan;
                 while (scan < log_len && log[scan] != '\n') scan++;
                 uint64_t ll = scan - ls;
                 if (scan < log_len && log[scan] == '\n') scan++;
                 if (ll > 0 && (sfind_n(log + ls, ll, "mtk_buttons:") ||
                                sfind_n(log + ls, ll, "mtk_touch:") ||
+                               sfind_n(log + ls, ll, "mtk_ufs_ro:") ||
                                sfind_n(log + ls, ll, "virtio-input:"))) {
                     char lbuf[96];
                     uint32_t ln = 0;
@@ -762,7 +822,7 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
                         if (c >= 32 && c < 127) lbuf[ln++] = c;
                     }
                     lbuf[ln] = 0;
-                    uint32_t col = sfind_n(lbuf, ln, "detected") || sfind_n(lbuf, ln, "ready") ? COL_GREEN : COL_CYAN;
+                    uint32_t col = (sfind_n(lbuf, ln, "detected") || sfind_n(lbuf, ln, "ready") || sfind_n(lbuf, ln, "GPT OK")) ? COL_GREEN : COL_CYAN;
                     fb_draw_text(ctx, 16u, y_start, 2u, lbuf, col, 0u);
                     y_start += 26u;
                     shown++;
@@ -893,7 +953,7 @@ __attribute__((noinline, noreturn)) void V50OnException(
     ctx->physical = 1;
     g_con = NULL;
     fb_clear(ctx);
-    ui_line(ctx, 0, "RUBY v0.52: EARLY LOADER EXCEPTION", COL_RED);
+    ui_line(ctx, 0, "RUBY v0.53: EARLY LOADER EXCEPTION", COL_RED);
     ui_hex(ctx, 2, "Vector: ", vec, COL_YELLOW);
     ui_hex(ctx, 3, "ESR:    ", esr, COL_RED);
     ui_hex(ctx, 4, "ELR:    ", elr, COL_WHITE);
@@ -1058,7 +1118,7 @@ efi_status EFIAPI efi_main(efi_handle image, efi_system_table *st) {
         ctx.fb_pitch = (uint64_t)ctx.fb_stride_px * 4ULL;
     }
     fb_clear(&ctx);
-    ui_line(&ctx, 0, "ruby v0.52 - HakiOS XNU SMP + Input/Touch", COL_GREEN);
+    ui_line(&ctx, 0, "ruby v0.53 - HakiOS SMP + Goodix + RO-UFS + RAM", COL_GREEN);
 
     uint64_t el = 0;
     __asm__ volatile("mrs %0, CurrentEL" : "=r"(el));
@@ -1102,6 +1162,8 @@ efi_status EFIAPI efi_main(efi_handle image, efi_system_table *st) {
         ctx.io_size = 0x10000000ULL;
         ctx.xnu_phys_base = ram.base;
         ctx.xnu_mem_size = ram.size;
+        ctx.fallback_phys_base = ram.fallback_base;
+        ctx.fallback_mem_size = ram.fallback_size;
         ctx.cpu_mpidr[0] = boot_id;
         ctx.cpu_count = 1u;
         ctx.cpu_skipped = 0u;
@@ -1200,6 +1262,15 @@ efi_status EFIAPI efi_main(efi_handle image, efi_system_table *st) {
         v50_overlaps(payload_pa, PAYLOAD_MAX_BYTES, ctx.xnu_phys_base, ctx.xnu_mem_size) ||
         v50_overlaps(ctx.fb_base, (uint64_t)ctx.fb_height * ctx.fb_pitch, ctx.xnu_phys_base, ctx.xnu_mem_size)) {
         ui_halt(&ctx, 9, "ERROR: Memory overlap with XNU window", img_pa);
+    }
+    if (ctx.fallback_phys_base && (
+        v50_overlaps(img_pa, img_sz, ctx.fallback_phys_base, ctx.fallback_mem_size) ||
+        v50_overlaps(stack_pa, 0x10000ULL, ctx.fallback_phys_base, ctx.fallback_mem_size) ||
+        v50_overlaps(pram_pa, PANIC_LOG_SIZE, ctx.fallback_phys_base, ctx.fallback_mem_size) ||
+        v50_overlaps(payload_pa, PAYLOAD_MAX_BYTES, ctx.fallback_phys_base, ctx.fallback_mem_size) ||
+        v50_overlaps(ctx.fb_base, (uint64_t)ctx.fb_height * ctx.fb_pitch, ctx.fallback_phys_base, ctx.fallback_mem_size))) {
+        ctx.fallback_phys_base = 0;
+        ctx.fallback_mem_size = 0;
     }
 
     /* Read \PAYLOAD.XNP from the same FAT16 volume we were launched from. */
