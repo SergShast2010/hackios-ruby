@@ -8,6 +8,9 @@
 #include "Font.h"
 #include "IrqFdt.h"
 #include "v50_ram_select.h"
+#ifdef V50_APPLE_SPLASH
+#include "v50_apple_logo.h"
+#endif
 
 #define KERNEL_VIRT_BASE    0xFFFFFFF004000000ULL
 #define KERNEL_LINK_OFFSET  0x03000000ULL
@@ -241,6 +244,45 @@ static void fb_clear(const struct v50_ctx *ctx) {
     else __asm__ volatile("dsb sy" ::: "memory");
 }
 
+#ifdef V50_APPLE_SPLASH
+static void fb_draw_apple(const struct v50_ctx *ctx) {
+    if (!ctx->fb_base || !ctx->fb_width || !ctx->fb_height) return;
+    fb_clear(ctx);
+    uint32_t half = (ctx->fb_width < 900u || ctx->fb_height < 500u) ? 1u : 0u;
+    uint32_t dw = half ? (V50_APPLE_W / 2u) : V50_APPLE_W;
+    uint32_t dh = half ? (V50_APPLE_H / 2u) : V50_APPLE_H;
+    if (dw > ctx->fb_width || dh > ctx->fb_height) return;
+    uint32_t x0 = (ctx->fb_width - dw) / 2u;
+    uint32_t y0 = (ctx->fb_height - dh) / 2u;
+    volatile uint32_t *fb = (volatile uint32_t *)(uintptr_t)ctx->fb_base;
+
+    uint32_t px = 0, py = 0;
+    for (uint32_t i = 0; i + 1u < V50_APPLE_RLE_LEN; i += 2u) {
+        uint32_t cnt = v50_apple_rle[i];
+        uint32_t v = v50_apple_rle[i + 1u];
+        uint32_t col = 0xFF000000u | (v << 16) | (v << 8) | v;
+        while (cnt--) {
+            if (py < V50_APPLE_H) {
+                if (v) {
+                    if (!half) {
+                        fb[(uint64_t)(y0 + py) * ctx->fb_stride_px + (x0 + px)] = col;
+                    } else if ((px & 1u) == 0u && (py & 1u) == 0u) {
+                        fb[(uint64_t)(y0 + (py >> 1)) * ctx->fb_stride_px + (x0 + (px >> 1))] = col;
+                    }
+                }
+                px++;
+                if (px >= V50_APPLE_W) {
+                    px = 0;
+                    py++;
+                }
+            }
+        }
+    }
+    if (!ctx->physical) v50_flush_cache(ctx->fb_base + (uint64_t)y0 * ctx->fb_pitch, (uint64_t)dh * ctx->fb_pitch);
+    else __asm__ volatile("dsb sy" ::: "memory");
+}
+#endif
+
 static void fb_draw_text(const struct v50_ctx *ctx, uint32_t x0, uint32_t y0, uint32_t scale,
                          const char *s, uint32_t color, uint32_t clear_row) {
     if (!ctx->physical) con_puts(s);
@@ -279,6 +321,12 @@ static void fb_draw_text(const struct v50_ctx *ctx, uint32_t x0, uint32_t y0, ui
 }
 
 static void ui_line(const struct v50_ctx *ctx, uint32_t row, const char *s, uint32_t color) {
+#ifdef V50_APPLE_SPLASH
+    if (!ctx->physical) {
+        (void)row; (void)s; (void)color;
+        return;
+    }
+#endif
     fb_draw_text(ctx, 20u, 80u + row * 44u, 3u, s, color, 1u);
 }
 
@@ -293,9 +341,22 @@ static void ui_hex(const struct v50_ctx *ctx, uint32_t row, const char *label, u
 }
 
 __attribute__((noinline, noreturn)) static void ui_halt(const struct v50_ctx *ctx, uint32_t row, const char *msg, uint64_t code) {
+#ifdef V50_APPLE_SPLASH
+    fb_clear(ctx);
+    fb_draw_text(ctx, 20u, 80u + row * 44u, 3u, msg, COL_RED, 1u);
+    {
+        char buf[32]; uint32_t n = 0;
+        buf[n++] = '0'; buf[n++] = 'x';
+        for (int sh = 60; sh >= 0; sh -= 4) buf[n++] = "0123456789ABCDEF"[(code >> sh) & 15u];
+        buf[n] = 0;
+        fb_draw_text(ctx, 20u, 80u + (row + 1u) * 44u, 3u, buf, COL_YELLOW, 1u);
+    }
+    fb_draw_text(ctx, 20u, 80u + (row + 2u) * 44u, 3u, "Halted safely - photograph this screen", COL_WHITE, 1u);
+#else
     ui_line(ctx, row, msg, COL_RED);
     ui_hex(ctx, row + 1, "Code: ", code, COL_YELLOW);
     ui_line(ctx, row + 2, "Halted safely - photograph this screen", COL_WHITE);
+#endif
     for (;;) __asm__ volatile("yield");
 }
 
@@ -691,7 +752,11 @@ __attribute__((noinline, noreturn)) void V50BootPhysical(struct v50_ctx *ctx) {
 
     if (ctx->fb_base) {
         ba->video.v_baseAddr = ctx->fb_base;
+#ifdef V50_APPLE_SPLASH
+        ba->video.v_display = 1; /* graphics mode: keep Apple splash logo on screen */
+#else
         ba->video.v_display = 0; /* text console mode for -v */
+#endif
         ba->video.v_rowBytes = ctx->fb_pitch;
         ba->video.v_width = ctx->fb_width;
         ba->video.v_height = ctx->fb_height;
@@ -708,7 +773,9 @@ __attribute__((noinline, noreturn)) void V50BootPhysical(struct v50_ctx *ctx) {
         append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, cbuf);
     }
     if (rd_size) append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "rd=md0 ");
+#ifndef V50_APPLE_SPLASH
     append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "-v ");
+#endif
     if (ctx->kver[0]) {
         append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "hakios_kver=");
         append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, ctx->kver);
@@ -730,6 +797,7 @@ __attribute__((noinline, noreturn)) void V50BootPhysical(struct v50_ctx *ctx) {
     ui_hex(ctx, 17, "return slot:  ", slot_pa, slot_pa ? COL_GREEN : COL_YELLOW);
     ui_line(ctx, 18, "Jumping to XNU kernel now...", COL_GREEN);
 
+#ifndef V50_APPLE_SPLASH
     /* Brief pause on phone so staging summary is visible before XNU clears the screen. */
     if (!ctx->is_qemu && ctx->cntfrq >= 1000000ULL) {
         uint64_t t0, now;
@@ -740,6 +808,9 @@ __attribute__((noinline, noreturn)) void V50BootPhysical(struct v50_ctx *ctx) {
     }
 
     fb_clear(ctx);
+#else
+    fb_draw_apple(ctx);
+#endif
     __asm__ volatile("msr cntv_ctl_el0, %0\nmsr cntp_ctl_el0, %0\nisb" : : "r"(2ULL) : "memory");
     __asm__ volatile("dsb sy\nisb\nmrs %0, isr_el1" : "=r"(ctx->isr_pre_jump));
     V50JumpXnu(entry_pa, ba_pa);
@@ -1142,7 +1213,11 @@ efi_status EFIAPI efi_main(efi_handle image, efi_system_table *st) {
         if (ctx.fb_stride_px < ctx.fb_width) ctx.fb_stride_px = ctx.fb_width;
         ctx.fb_pitch = (uint64_t)ctx.fb_stride_px * 4ULL;
     }
+#ifdef V50_APPLE_SPLASH
+    fb_draw_apple(&ctx);
+#else
     fb_clear(&ctx);
+#endif
     ui_line(&ctx, 0, "ruby v0.55b - HakiOS 4 GiB + 8C + UFS + USB ECM", COL_GREEN);
 
     uint64_t el = 0;

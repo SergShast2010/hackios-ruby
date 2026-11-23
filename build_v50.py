@@ -21,12 +21,14 @@ def sha256_bytes(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
 
 
-def build_v50_efi(work: Path) -> Path:
+def build_v50_efi(work: Path, apple_splash: bool = False) -> Path:
     flags = [
         'clang', '--target=aarch64-unknown-windows', '-ffreestanding', '-fno-builtin',
         '-fno-stack-protector', '-fshort-wchar', '-mgeneral-regs-only', '-mstrict-align', '-mno-stack-arg-probe',
         '-O2', '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter',
     ]
+    if apple_splash:
+        flags.append('-DV50_APPLE_SPLASH=1')
     objs = []
     for name in ('v50_loader.c', 'v50_asm.S'):
         obj = work / (name + '.obj')
@@ -44,12 +46,12 @@ def build_v50_efi(work: Path) -> Path:
     return efi
 
 
-def build(out: Path, kernel: Path, ramdisk: Path, cmdline: str, kver: str, pack_base: Path = PACK_BASE):
+def build(out: Path, kernel: Path, ramdisk: Path, cmdline: str, kver: str, pack_base: Path = PACK_BASE, apple_splash: bool = False):
     out = out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix='.v50-', dir=out) as w:
         work = Path(w)
-        efi = build_v50_efi(work)
+        efi = build_v50_efi(work, apple_splash=apple_splash)
         payload = work / 'PAYLOAD.XNP'
         subprocess.run([
             'python3', str(MKPAYLOAD), '-o', str(payload),
@@ -62,14 +64,16 @@ def build(out: Path, kernel: Path, ramdisk: Path, cmdline: str, kver: str, pack_
         image_bytes, report, _chunks = package_image.build(
             pack_base.read_bytes(), efi_bytes, payload=payload_bytes
         )
-        img = out / V50_IMAGE
+        image_name = 'Mu-ruby-v0.55b-apple-splash.img' if apple_splash else V50_IMAGE
+        img = out / image_name
         img.write_bytes(image_bytes)
         (out / 'v50_loader.efi').write_bytes(efi_bytes)
         (out / 'PAYLOAD.XNP').write_bytes(payload_bytes)
 
         manifest = {
             'version': 'v0.55b',
-            'image': V50_IMAGE,
+            'image': image_name,
+            'apple_splash': apple_splash,
             'image_bytes': len(image_bytes),
             'image_sha256': sha256_bytes(image_bytes),
             'efi_bytes': len(efi_bytes),
@@ -103,5 +107,6 @@ if __name__ == '__main__':
     ap.add_argument('--cmdline', default='')
     ap.add_argument('--kernel-version', default='ruby-v0.55b-mt6877')
     ap.add_argument('--pack-base', type=Path, default=PACK_BASE)
+    ap.add_argument('--apple-splash', action='store_true', help='Boot with Apple splash logo instead of verbose console')
     a = ap.parse_args()
-    build(a.out, a.kernel, a.ramdisk, a.cmdline, a.kernel_version, a.pack_base)
+    build(a.out, a.kernel, a.ramdisk, a.cmdline, a.kernel_version, a.pack_base, apple_splash=a.apple_splash)
