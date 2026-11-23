@@ -1,0 +1,85 @@
+From: hackios-ruby v0.54d
+Subject: [PATCH] Fix early io_map() VA overlap on 16K VM pages, Cortex-A78 FEAT_CCIDX cache flush, and loader_return TTBR0 table cache clean
+
+1) osfmk/arm/io_map.c (ROOT CAUSE of SError on >1 GiB RAM):
+   When args->memSize > 1 GiB on ARM64 BCM2837 (4K HW / 16K VM pages),
+   arm_init.c switches PAGE_SHIFT_CONST to 14 (16 KiB). Early io_map()
+   (startup_phase < STARTUP_SUB_KMEM) computes alloc_size = round_page(size + start_offset)
+   and maps [start, start + alloc_size), but previously incremented
+   virtual_space_start by round_page(size) only. On ruby, the GOP framebuffer
+   at 0x7c406000 has start_offset = 0x2000, so gic_v3_irq's subsequent
+   ml_io_map(0x0c000000, 0x40000) overwrote the last 16 KiB page of the
+   framebuffer mapping with GICD MMIO. vc_clear_screen() in PE_init_printf(TRUE)
+   then wrote 32-byte NEON stores into GICD+0x0000..0x1400, raising an
+   asynchronous SError (esr=0xbe000011).
+
+2) osfmk/arm64/caches_asm.s:
+   GET_CACHE_CONFIG hardcoded the CCIDX=0 CCSIDR_EL1 bit layout ([12:3] ways,
+   [27:13] sets). On MT6877 big cores (Cortex-A78, CPUs 6-7), FEAT_CCIDX=1
+   puts ways-1 in [23:3] and sets-1 in [55:32], causing set/way maintenance
+   to only clean 1 set. Decode ID_AA64MMFR2_EL1.CCIDX dynamically.
+
+3) osfmk/arm64/loader_return.c:
+   Clean loader_l1 and loader_l2 PTEs to PoC (dc cvac) before loading TTBR0_EL1.
+
+--- a/osfmk/arm/io_map.c
++++ b/osfmk/arm/io_map.c
+@@ -101,8 +101,12 @@ io_map(
+ 	if (startup_phase < STARTUP_SUB_KMEM) {
+ 		/*
+ 		 * VM is not initialized.  Grab memory.
++		 * Note: pmap_map_bd maps [start, start + alloc_size) where alloc_size
++		 * includes start_offset; advancing by round_page(size) alone overlaps
++		 * the last page with the next early io_map() whenever phys_addr is not
++		 * PAGE_SIZE-aligned (e.g. 16 KiB VM pages with a 4 KiB-aligned FB).
+ 		 */
+ 		start = virtual_space_start;
+-		virtual_space_start += round_page(size);
++		virtual_space_start += alloc_size;
+ 
+ 		assert(flags == VM_WIMG_WCOMB || flags == VM_WIMG_IO);
+--- a/osfmk/arm64/caches_asm.s
++++ b/osfmk/arm64/caches_asm.s
+@@ -95,7 +95,14 @@
+ 	isb											// Synchronize context
+ 
+ 	mrs		$0, CCSIDR_EL1
+-	ubfx	$1, $0, #3, #10						// extract number of ways - 1
++	mrs		$3, S3_0_C0_C7_2					// ID_AA64MMFR2_EL1
++	ubfx	$3, $3, #20, #4						// FEAT_CCIDX
++	cbnz	$3, 6f
++	ubfx	$1, $0, #3, #10						// CCIDX=0: ways - 1 [12:3]
++	b		7f
++6:
++	ubfx	$1, $0, #3, #21						// CCIDX=1: ways - 1 [23:3]
++7:
+ 	mov		$2, $1
+ 	add		$1, $1, #1							// calculate number of ways
+ 
+@@ -113,7 +120,14 @@
+ 	mov		$2, #1
+ 	lsl		$1, $2, $1							// calculate set increment
+ 
+-	ubfx	$2, $0, #13, #15					// extract number of sets - 1
++	mrs		$2, S3_0_C0_C7_2					// ID_AA64MMFR2_EL1
++	ubfx	$2, $2, #20, #4						// FEAT_CCIDX
++	cbnz	$2, 8f
++	ubfx	$2, $0, #13, #15					// CCIDX=0: sets - 1 [27:13]
++	b		9f
++8:
++	ubfx	$2, $0, #32, #24					// CCIDX=1: sets - 1 [55:32]
++9:
+ 	add		$2, $2, #1							// calculate number of sets
+ 	mul		$2, $1, $2							// calculate last valid set
+ .endmacro
+--- a/osfmk/arm64/loader_return.c
++++ b/osfmk/arm64/loader_return.c
+@@ -255,6 +255,8 @@ loader_jump(uint64_t reason, uint64_t code)
+ 	loader_l2[(stub >> 21) & 0x1ff] = (stub & ~0x1fffffULL) | ARM_TTE_VALID | ARM_TTE_TYPE_BLOCK |
+ 	    ARM_TTE_BLOCK_AF | ARM_TTE_BLOCK_SH(SH_OUTER_MEMORY) | ARM_TTE_BLOCK_AP(AP_RWNA) |
+ 	    ARM_TTE_BLOCK_ATTRINDX(CACHE_ATTRINDX_WRITEBACK);
++	__asm__ volatile ("dc cvac, %0" : : "r" (&loader_l1[stub >> 30]) : "memory");
++	__asm__ volatile ("dc cvac, %0" : : "r" (&loader_l2[(stub >> 21) & 0x1ff]) : "memory");
+ 
+ 	/*
+ 	 * The stub turns the MMU off, and on real hardware dirty cache lines do
