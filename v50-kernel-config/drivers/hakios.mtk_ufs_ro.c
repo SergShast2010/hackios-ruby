@@ -336,8 +336,9 @@ ramdiag_open(__unused dev_t dev, __unused int flags, __unused int type, __unused
 		0x23D000000ULL,
 	};
 
-	uint64_t saved_daif = 0, pre_isr = 0;
+	uint64_t saved_daif = 0, pre_isr = 0, tcr = 0;
 	__asm__ volatile("mrs %0, daif" : "=r"(saved_daif));
+	__asm__ volatile("mrs %0, tcr_el1" : "=r"(tcr));
 	__asm__ volatile("msr daifset, #4\n\tisb" ::: "memory");
 	__asm__ volatile("dsb sy\n\tisb\n\tmrs %0, isr_el1" : "=r"(pre_isr));
 
@@ -357,8 +358,8 @@ ramdiag_open(__unused dev_t dev, __unused int flags, __unused int type, __unused
 		uint64_t isr = 0;
 		__asm__ volatile("mrs %0, isr_el1" : "=r"(isr));
 		if (isr & 0x100ULL) {
-			printf("mtk_ram_diag: SERROR READ pa=0x%llx isr=0x%llx pre=0x%llx\n",
-			    (unsigned long long)pa, (unsigned long long)isr, (unsigned long long)pre_isr);
+			printf("mtk_ram_diag: SERROR READ pa=0x%llx isr=0x%llx pre=0x%llx tcr=0x%llx\n",
+			    (unsigned long long)pa, (unsigned long long)isr, (unsigned long long)pre_isr, (unsigned long long)tcr);
 			loader_return();
 			return 0;
 		}
@@ -368,15 +369,15 @@ ramdiag_open(__unused dev_t dev, __unused int flags, __unused int type, __unused
 		__asm__ volatile("dsb sy\n\tdc civac, %0\n\tdsb sy\n\tisb" :: "r"(va) : "memory");
 		__asm__ volatile("mrs %0, isr_el1" : "=r"(isr));
 		if (isr & 0x100ULL) {
-			printf("mtk_ram_diag: SERROR WRITE pa=0x%llx isr=0x%llx pre=0x%llx\n",
-			    (unsigned long long)pa, (unsigned long long)isr, (unsigned long long)pre_isr);
+			printf("mtk_ram_diag: SERROR WRITE pa=0x%llx isr=0x%llx pre=0x%llx tcr=0x%llx\n",
+			    (unsigned long long)pa, (unsigned long long)isr, (unsigned long long)pre_isr, (unsigned long long)tcr);
 			loader_return();
 			return 0;
 		}
 	}
 
-	printf("mtk_ram_diag: ALL 9 HIGH-PA WBACK CLEAN (0x100000000..0x23D000000 pre=0x%llx)\n",
-	    (unsigned long long)pre_isr);
+	printf("mtk_ram_diag: ALL 9 HIGH-PA WBACK CLEAN (0x100000000..0x23D000000 pre=0x%llx tcr=0x%llx)\n",
+	    (unsigned long long)pre_isr, (unsigned long long)tcr);
 	__asm__ volatile("msr daif, %0\n\tisb" :: "r"(saved_daif) : "memory");
 	return 0;
 }

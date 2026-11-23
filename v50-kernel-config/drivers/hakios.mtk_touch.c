@@ -1,12 +1,15 @@
 /*
- * Goodix GT9916R (BerlinD) SPI3 touch driver for Redmi Note 12 Pro 5G (ruby, MT6877).
- * Hardware sequence verified on live ruby (adapted from lky005/ruby-ios-bringup):
+ * Dual-chip SPI3 touch driver for Redmi Note 12 Pro 5G (ruby, MediaTek MT6877):
+ *   1. FocalTech FT3680 (FTS 5.x SPI v2: 0xA0 read + 3 dummy + CRC-16/Kermit LE, 10x super-res)
+ *   2. Goodix GT9916R (Berlin-D SPI: 0xF1 read / 0xF0 write, 0x10308 coord polling)
+ *
+ * Shared power-up sequence verified on live ruby:
+ *   - Hold reset GPIO15 low before power rails
  *   - MT6360 PMIC on I2C5 (GPIO132 SCL / GPIO133 SDA, addr 0x64, SMBus CRC8):
  *       LDO3 (VMC/IOVDD) = 1.8 V (0x3a), LDO2 (VTP/AVDD) = 3.3 V (0xd0)
- *   - IOVDD switch GPIO110 high, reset GPIO15 low 10 ms -> high 100 ms
+ *   - DVDD/IOVDD switch GPIO110 high, enable LDO3 then LDO2
  *   - SPI3 bit-bang Mode 0 on GPIO160 MO / 161 MI / 162 CS / 163 CLK
- *   - Confirm via 0x10000 loopback + 0x10014 "BERLIN" version checksum
- *   - Poll 0x10308 every 8 ms, scale 10800x24000 -> 1080x2400, post to /dev/hakios-touch
+ *   - Release reset GPIO15 high + 200 ms settle, then auto-probe FT3680 -> GT9916R
  *
  * No firmware or config upload is performed.
  * Boot args: touchscreen=2 [touchlog=1].
@@ -53,7 +56,7 @@ extern kern_return_t thread_terminate(thread_t);
 #define GT_SPI_DO       GT_DO(5)
 #define GT_SPI_DI       GT_DI(5)
 
-/* Reset GPIO15 (bank 0), IOVDD switch GPIO110 (bank 3) */
+/* Reset GPIO15 (bank 0), DVDD/IOVDD switch GPIO110 (bank 3) */
 #define GT_RESET        (1u << 15)
 #define GT_IOVDD        (1u << 14)
 #define GT_RESET_DIR    GT_DIR(0)
@@ -61,179 +64,175 @@ extern kern_return_t thread_terminate(thread_t);
 #define GT_IOVDD_DIR    GT_DIR(3)
 #define GT_IOVDD_DO     GT_DO(3)
 
-/* MT6360 on I2C5 */
+/* MT6360 LDO page (addr 0x64, SMBus CRC8) */
 #define GT_PMIC_ADDR    0x64u
 #define GT_LDO3_EN      0x05u
-#define GT_LDO3_VOUT    0x09u
-#define GT_LDO2_EN      0x11u
-#define GT_LDO2_VOUT    0x15u
+#define GT_LDO3_VOUT    0x09u   /* VMC/IOVDD: 0x3a = 1.8 V */
+#define GT_LDO2_EN      0x0bu
+#define GT_LDO2_VOUT    0x0fu   /* VTP/AVDD:  0xd0 = 3.3 V */
+
+/* FocalTech FT3680 SPI v2 constants (verified against ruby focaltech_3680) */
+#define FTS_READ_CTRL       0xa0u   /* 0x80 | DATA_CRC_EN(0x20) */
+#define FTS_WRITE_CTRL      0x00u
+#define FTS_REG_TOUCH       0x01u
+#define FTS_REG_CHIP_ID_H   0xa3u
+#define FTS_REG_CHIP_ID_L   0x9fu
+#define FTS_REG_FW_VER      0xa6u
+#define FTS_CMD_START1      0x55u
+#define FTS_CMD_START2      0xaau
+#define FTS_CMD_READ_BOOTID 0x90u
+#define FTS_CMD_START_APP   0x08u
+#define FTS_TOUCH_LEN       (2u + 6u * GT_MAX)  /* 62 bytes */
+#define FTS_BUF_MAX         80u
+
+enum mtk_touch_chip {
+	CHIP_NONE = 0,
+	CHIP_FTS  = 1,
+	CHIP_GOODIX = 2,
+};
 
 static struct {
-	vm_offset_t gpio;
-	bool started;
-	int log;
+	volatile uint32_t *gpio;
 	uint32_t active;
 	uint32_t x[GT_MAX], y[GT_MAX];
 	uint32_t prev_x[GT_MAX], prev_y[GT_MAX];
+	enum mtk_touch_chip chip;
+	bool started;
+	bool log;
+	unsigned log_cnt;
 } gt;
 
-static int gt_sleep_chan;
+static uint8_t fts_tx[FTS_BUF_MAX];
+static uint8_t fts_rx[FTS_BUF_MAX];
 
-static inline void
-gt_udelay(uint32_t us)
-{
-	delay_for_interval(us, NSEC_PER_USEC);
-}
-
-static uint32_t
+static inline uint32_t
 gt_rd(uint32_t off)
 {
-	uint32_t v = *(volatile uint32_t *)(gt.gpio + off);
-	__asm__ volatile("dmb oshld" ::: "memory");
-	return v;
+	return gt.gpio[off >> 2];
 }
 
-static void
-gt_wr(uint32_t off, uint32_t val)
+static inline void
+gt_wr(uint32_t off, uint32_t v)
 {
-	__asm__ volatile("dmb oshst" ::: "memory");
-	*(volatile uint32_t *)(gt.gpio + off) = val;
-	__asm__ volatile("dsb osh" ::: "memory");
+	gt.gpio[off >> 2] = v;
+	__asm__ volatile("dsb sy" ::: "memory");
 }
 
 static void
-gt_wait(unsigned ms)
+gt_udelay(uint32_t us)
+{
+	uint64_t deadline;
+	clock_interval_to_deadline(us, NSEC_PER_USEC, &deadline);
+	while (mach_absolute_time() < deadline) {
+		__asm__ volatile("yield" ::: "memory");
+	}
+}
+
+static void
+gt_wait(uint32_t ms)
 {
 	uint64_t deadline;
 	clock_interval_to_deadline(ms, NSEC_PER_MSEC, &deadline);
-	(void)assert_wait_deadline(&gt_sleep_chan, THREAD_UNINT, deadline);
+	assert_wait_deadline((event_t)&gt, THREAD_UNINT, deadline);
 	thread_block(THREAD_CONTINUE_NULL);
+}
+
+static void
+gt_set_dir(uint32_t off, uint32_t mask, bool out)
+{
+	uint32_t v = gt_rd(off);
+	gt_wr(off, out ? (v | mask) : (v & ~mask));
 }
 
 static void
 gt_set_do(uint32_t off, uint32_t mask, bool high)
 {
 	uint32_t v = gt_rd(off);
-	if (high) {
-		v |= mask;
-	} else {
-		v &= ~mask;
-	}
-	gt_wr(off, v);
+	gt_wr(off, high ? (v | mask) : (v & ~mask));
 }
 
-/* ---- I2C5 bit-bang (open-drain with external pull-ups) ---- */
+/* ---- I2C5 GPIO bit-bang for MT6360 PMIC ---- */
 
-static void i2c_scl_release(void) { gt_wr(GT_I2C_DIR, gt_rd(GT_I2C_DIR) & ~GT_SCL); }
-static void i2c_scl_low(void)     { gt_set_do(GT_I2C_DO, GT_SCL, false); gt_wr(GT_I2C_DIR, gt_rd(GT_I2C_DIR) | GT_SCL); }
-static void i2c_sda_release(void) { gt_wr(GT_I2C_DIR, gt_rd(GT_I2C_DIR) & ~GT_SDA); }
-static void i2c_sda_low(void)     { gt_set_do(GT_I2C_DO, GT_SDA, false); gt_wr(GT_I2C_DIR, gt_rd(GT_I2C_DIR) | GT_SDA); }
+static void
+i2c_scl(bool high)
+{
+	gt_set_dir(GT_I2C_DIR, GT_SCL, !high);
+	gt_udelay(5);
+}
+
+static void
+i2c_sda(bool high)
+{
+	gt_set_dir(GT_I2C_DIR, GT_SDA, !high);
+	gt_udelay(5);
+}
 
 static bool
-i2c_sda_read(void)
+i2c_sda_in(void)
 {
-	i2c_sda_release();
-	gt_udelay(2);
 	return (gt_rd(GT_I2C_DI) & GT_SDA) != 0;
 }
 
 static void
 i2c_start(void)
 {
-	i2c_sda_release();
-	i2c_scl_release();
-	gt_udelay(5);
-	i2c_sda_low();
-	gt_udelay(5);
-	i2c_scl_low();
-	gt_udelay(5);
+	i2c_sda(true);
+	i2c_scl(true);
+	i2c_sda(false);
+	i2c_scl(false);
 }
 
 static void
 i2c_stop(void)
 {
-	i2c_sda_low();
-	gt_udelay(5);
-	i2c_scl_release();
-	gt_udelay(5);
-	i2c_sda_release();
-	gt_udelay(5);
-}
-
-static void
-i2c_write_bit(bool bit)
-{
-	if (bit) i2c_sda_release();
-	else i2c_sda_low();
-	gt_udelay(5);
-	i2c_scl_release();
-	gt_udelay(5);
-	i2c_scl_low();
-	gt_udelay(5);
+	i2c_sda(false);
+	i2c_scl(true);
+	i2c_sda(true);
 }
 
 static bool
-i2c_read_bit(void)
+i2c_write_byte(uint8_t v)
 {
-	i2c_sda_release();
-	gt_udelay(5);
-	i2c_scl_release();
-	gt_udelay(5);
-	bool bit = i2c_sda_read();
-	i2c_scl_low();
-	gt_udelay(5);
-	return bit;
-}
-
-static bool
-i2c_write_byte(uint8_t b)
-{
-	for (int i = 7; i >= 0; i--) {
-		i2c_write_bit(((b >> i) & 1) != 0);
+	bool ack;
+	for (int b = 7; b >= 0; b--) {
+		i2c_sda(((v >> b) & 1) != 0);
+		i2c_scl(true);
+		i2c_scl(false);
 	}
-	i2c_sda_release();
-	gt_udelay(5);
-	i2c_scl_release();
-	gt_udelay(5);
-	bool ack = !i2c_sda_read();
-	i2c_scl_low();
-	gt_udelay(5);
+	i2c_sda(true);
+	i2c_scl(true);
+	ack = !i2c_sda_in();
+	i2c_scl(false);
 	return ack;
 }
 
 static uint8_t
 i2c_read_byte(bool ack)
 {
-	uint8_t b = 0;
-	for (int i = 7; i >= 0; i--) {
-		if (i2c_read_bit()) {
-			b |= (uint8_t)(1u << i);
+	uint8_t v = 0;
+	i2c_sda(true);
+	for (int b = 7; b >= 0; b--) {
+		i2c_scl(true);
+		if (i2c_sda_in()) {
+			v |= (uint8_t)(1u << b);
 		}
+		i2c_scl(false);
 	}
-	i2c_sda_release();
-	gt_udelay(5);
-	if (ack) {
-		i2c_sda_low();
-	}
-	gt_udelay(5);
-	i2c_scl_release();
-	gt_udelay(5);
-	i2c_scl_low();
-	gt_udelay(5);
-	i2c_sda_release();
-	return b;
+	i2c_sda(!ack);
+	i2c_scl(true);
+	i2c_scl(false);
+	i2c_sda(true);
+	return v;
 }
 
-/* ---- MT6360 CRC8 SMBus access ---- */
-
 static uint8_t
-gt_crc8(const uint8_t *p, int n)
+gt_crc8(const uint8_t *p, unsigned n)
 {
 	uint8_t crc = 0;
-	for (int i = 0; i < n; i++) {
+	for (unsigned i = 0; i < n; i++) {
 		crc ^= p[i];
 		for (int b = 0; b < 8; b++) {
-			crc = (crc & 0x80) ? (uint8_t)((crc << 1) ^ 0x07) : (uint8_t)(crc << 1);
+			crc = (crc & 0x80u) ? (uint8_t)((crc << 1) ^ 0x07u) : (uint8_t)(crc << 1);
 		}
 	}
 	return crc;
@@ -242,7 +241,7 @@ gt_crc8(const uint8_t *p, int n)
 static bool
 pmic_read(uint8_t reg, uint8_t *val)
 {
-	uint8_t d[2], c[3];
+	uint8_t c[3], d[2];
 
 	i2c_start();
 	if (!i2c_write_byte((uint8_t)(GT_PMIC_ADDR << 1))) goto fail;
@@ -287,7 +286,7 @@ fail:
 	return false;
 }
 
-/* ---- SPI3 GPIO bit-bang, Mode 0 ---- */
+/* ---- SPI3 GPIO bit-bang, Mode 0 (CPOL=0, CPHA=0) ---- */
 
 static void
 spi_pin(uint32_t mask, bool high)
@@ -323,8 +322,256 @@ spi_xfer(const uint8_t *tx, uint8_t *rx, unsigned len)
 	spi_pin(GT_CS, true);
 }
 
+/* ---- Shared finger state publisher ---- */
+
 static void
-spi_read_req(uint8_t *tx, unsigned len, uint32_t addr)
+touch_release_all(void)
+{
+	for (uint32_t i = 0; i < GT_MAX; i++) {
+		if (gt.active & (1u << i)) {
+			hakios_touch_post(HAKIOS_TOUCH_UP, i, gt.x[i], gt.y[i]);
+		}
+	}
+	gt.active = 0;
+}
+
+static void
+touch_commit_mask(uint32_t mask)
+{
+	for (uint32_t i = 0; i < GT_MAX; i++) {
+		bool now = (mask & (1u << i)) != 0;
+		bool was = (gt.active & (1u << i)) != 0;
+		if (now && !was) {
+			gt.prev_x[i] = gt.x[i];
+			gt.prev_y[i] = gt.y[i];
+			if (gt.log && gt.log_cnt < 8u) {
+				gt.log_cnt++;
+				printf("mtk_touch: down f=%u x=%u y=%u\n", i, gt.x[i], gt.y[i]);
+			}
+			hakios_touch_post(HAKIOS_TOUCH_DOWN, i, gt.x[i], gt.y[i]);
+		} else if (now && was) {
+			if (gt.x[i] != gt.prev_x[i] || gt.y[i] != gt.prev_y[i]) {
+				gt.prev_x[i] = gt.x[i];
+				gt.prev_y[i] = gt.y[i];
+				hakios_touch_post(HAKIOS_TOUCH_MOVE, i, gt.x[i], gt.y[i]);
+			}
+		} else if (!now && was) {
+			if (gt.log && gt.log_cnt < 8u) {
+				gt.log_cnt++;
+				printf("mtk_touch: up f=%u x=%u y=%u\n", i, gt.x[i], gt.y[i]);
+			}
+			hakios_touch_post(HAKIOS_TOUCH_UP, i, gt.x[i], gt.y[i]);
+		}
+	}
+	gt.active = mask;
+}
+
+/* =========================================================================
+ * Protocol 1: FocalTech FT3680 (FTS 5.x SPI v2, verified from ruby kernel)
+ * ========================================================================= */
+
+static uint16_t
+fts_crc16(const uint8_t *data, unsigned len)
+{
+	uint16_t crc = 0xffffu;
+	for (unsigned i = 0; i < len; i++) {
+		crc ^= (uint16_t)data[i];
+		for (int b = 0; b < 8; b++) {
+			crc = (crc & 1u) ? (uint16_t)((crc >> 1) ^ 0x8408u) : (uint16_t)(crc >> 1);
+		}
+	}
+	return crc;
+}
+
+static bool
+fts_read(uint8_t addr, uint8_t *out, unsigned len)
+{
+	const unsigned dp = 7u;
+	unsigned total = dp + len + 2u;
+	if (len == 0 || total > FTS_BUF_MAX) {
+		return false;
+	}
+	for (int attempt = 0; attempt < 3; attempt++) {
+		for (unsigned i = 0; i < total; i++) {
+			fts_tx[i] = 0;
+			fts_rx[i] = 0;
+		}
+		fts_tx[0] = addr;
+		fts_tx[1] = FTS_READ_CTRL;
+		fts_tx[2] = (uint8_t)((len >> 8) & 0xffu);
+		fts_tx[3] = (uint8_t)(len & 0xffu);
+		spi_xfer(fts_tx, fts_rx, total);
+		gt_udelay(200); /* CS_HIGH_DELAY >= 150 us */
+		if ((fts_rx[3] & 0xa0u) == 0u) {
+			uint16_t calc = fts_crc16(fts_rx + dp, len);
+			uint16_t got = (uint16_t)((uint16_t)fts_rx[dp + len] |
+			    ((uint16_t)fts_rx[dp + len + 1] << 8));
+			if (calc == got) {
+				for (unsigned i = 0; i < len; i++) {
+					out[i] = fts_rx[dp + i];
+				}
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+static bool
+fts_write(uint8_t addr, const uint8_t *data, unsigned len)
+{
+	unsigned total = (len == 0u) ? 4u : (7u + len);
+	if (total > FTS_BUF_MAX) {
+		return false;
+	}
+	for (int attempt = 0; attempt < 3; attempt++) {
+		for (unsigned i = 0; i < total; i++) {
+			fts_tx[i] = 0;
+			fts_rx[i] = 0;
+		}
+		fts_tx[0] = addr;
+		fts_tx[1] = FTS_WRITE_CTRL;
+		fts_tx[2] = (uint8_t)((len >> 8) & 0xffu);
+		fts_tx[3] = (uint8_t)(len & 0xffu);
+		for (unsigned i = 0; i < len; i++) {
+			fts_tx[7u + i] = data[i];
+		}
+		spi_xfer(fts_tx, fts_rx, total);
+		gt_udelay(200);
+		if ((fts_rx[3] & 0xa0u) == 0u) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static void
+touch_reset_pulse(uint32_t low_ms, uint32_t high_ms)
+{
+	gt_wr(GT_RESET_DIR, gt_rd(GT_RESET_DIR) | GT_RESET);
+	gt_wr(GT_RESET_DO, gt_rd(GT_RESET_DO) & ~GT_RESET);
+	gt_wait(low_ms);
+	gt_wr(GT_RESET_DO, gt_rd(GT_RESET_DO) | GT_RESET);
+	if (high_ms) {
+		gt_wait(high_ms);
+	}
+}
+
+static bool
+fts_probe(uint8_t en3, uint8_t en2)
+{
+	uint8_t id_h = 0, id_l = 0, fw = 0;
+
+	/* Firmware in flash boots automatically within ~200 ms after reset. */
+	for (int attempt = 0; attempt < 5; attempt++) {
+		bool ok_h = fts_read(FTS_REG_CHIP_ID_H, &id_h, 1);
+		bool ok_l = fts_read(FTS_REG_CHIP_ID_L, &id_l, 1);
+		if (ok_h && ok_l && !(id_h == 0x00u && id_l == 0x00u) && !(id_h == 0xffu && id_l == 0xffu)) {
+			(void)fts_read(FTS_REG_FW_VER, &fw, 1);
+			printf("mtk_touch: detected FocalTech FT3680 (id=0x%02x%02x fw=0x%02x) 1080x2400 rails=%02x/%02x\n",
+			    id_h, id_l, fw, en3, en2);
+			gt.chip = CHIP_FTS;
+			return true;
+		}
+		gt_wait(80);
+	}
+
+	/* Fallback: check if chip is sitting in Boot ROM and issue START_APP (no flash/PRAM writes). */
+	uint8_t boot_id[2] = { 0, 0 };
+	uint8_t aa = FTS_CMD_START2;
+	for (int cnt = 0; cnt < 2; cnt++) {
+		touch_reset_pulse(2, 12u + (uint32_t)cnt * 8u);
+		if (fts_write(FTS_CMD_START1, &aa, 1)) {
+			gt_wait(12);
+			if (fts_read(FTS_CMD_READ_BOOTID, boot_id, 2) &&
+			    boot_id[0] == 0x56u && boot_id[1] == 0x62u) {
+				printf("mtk_touch: FT3680 in boot ROM (5662), starting flash app\n");
+				(void)fts_write(FTS_CMD_START_APP, NULL, 0);
+				gt_wait(250);
+				if (fts_read(FTS_REG_CHIP_ID_H, &id_h, 1) &&
+				    fts_read(FTS_REG_CHIP_ID_L, &id_l, 1) &&
+				    !(id_h == 0x00u && id_l == 0x00u) &&
+				    !(id_h == 0xffu && id_l == 0xffu)) {
+					(void)fts_read(FTS_REG_FW_VER, &fw, 1);
+					printf("mtk_touch: detected FocalTech FT3680 (id=0x%02x%02x fw=0x%02x bootrom) rails=%02x/%02x\n",
+					    id_h, id_l, fw, en3, en2);
+					gt.chip = CHIP_FTS;
+					return true;
+				}
+			}
+		}
+	}
+
+	/* Print raw SPI RX header from one 0xA3 read for hardware diagnostics. */
+	for (unsigned i = 0; i < 10u; i++) { fts_tx[i] = 0; fts_rx[i] = 0; }
+	fts_tx[0] = FTS_REG_CHIP_ID_H;
+	fts_tx[1] = FTS_READ_CTRL;
+	fts_tx[2] = 0;
+	fts_tx[3] = 1;
+	spi_xfer(fts_tx, fts_rx, 10u);
+	gt_udelay(200);
+	printf("mtk_touch: FTS miss id=%02x%02x boot=%02x%02x raw=%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+	    id_h, id_l, boot_id[0], boot_id[1],
+	    fts_rx[0], fts_rx[1], fts_rx[2], fts_rx[3], fts_rx[4],
+	    fts_rx[5], fts_rx[6], fts_rx[7], fts_rx[8], fts_rx[9]);
+	return false;
+}
+
+static int
+fts_frame(void)
+{
+	uint8_t buf[FTS_TOUCH_LEN];
+	if (!fts_read(FTS_REG_TOUCH, buf, sizeof(buf))) {
+		return EIO;
+	}
+	/* Idle / uninitialized report markers used by vendor driver */
+	if ((buf[1] == 0xffu && buf[2] == 0xffu && buf[3] == 0xffu) ||
+	    (buf[1] == 0xefu && buf[2] == 0xefu && buf[3] == 0xefu)) {
+		return EAGAIN;
+	}
+
+	uint8_t etype = (buf[1] >> 4) & 0x0fu;
+	if (etype != 0x00u && etype != 0x02u) {
+		return 0;
+	}
+
+	uint32_t mask = 0;
+	for (uint32_t i = 0; i < GT_MAX; i++) {
+		const uint8_t *p = buf + 2u + i * 6u;
+		uint32_t id = (uint32_t)((p[2] >> 4) & 0x0fu);
+		if (id >= GT_MAX) {
+			break;
+		}
+		uint32_t flag = (uint32_t)((p[0] >> 6) & 0x03u); /* 0=down, 1=up, 2=contact */
+		if (flag == 0u || flag == 2u) {
+			/* ruby focaltech_3680 super_resolution_factors == 10 (10800 x 24000) */
+			uint32_t rx = (((uint32_t)(p[0] & 0x0fu)) << 11)
+			            | (((uint32_t)p[1]) << 3)
+			            | ((((uint32_t)(p[4] & 0xc0u)) >> 6) << 1)
+			            | (((uint32_t)(p[0] & 0x20u)) >> 5);
+			uint32_t ry = (((uint32_t)(p[2] & 0x0fu)) << 11)
+			            | (((uint32_t)p[3]) << 3)
+			            | ((((uint32_t)(p[4] & 0x30u)) >> 4) << 1)
+			            | (((uint32_t)(p[2] & 0x10u)) >> 4);
+			uint32_t x = rx / 10u;
+			uint32_t y = ry / 10u;
+			if (x > 1079u) x = 1079u;
+			if (y > 2399u) y = 2399u;
+			mask |= (1u << id);
+			gt.x[id] = x;
+			gt.y[id] = y;
+		}
+	}
+	touch_commit_mask(mask);
+	return 0;
+}
+
+/* =========================================================================
+ * Protocol 2: Goodix GT9916R ("Berlin-D" SPI 0xF1 read / 0xF0 write)
+ * ========================================================================= */
+
+static void
+gt_spi_read_req(uint8_t *tx, unsigned len, uint32_t addr)
 {
 	for (unsigned i = 0; i < len; i++) {
 		tx[i] = 0;
@@ -360,21 +607,21 @@ gt_dev_confirm(void)
 			tx[5 + i] = 0xaa;
 		}
 		spi_xfer(tx, NULL, 13);
-		gt_wait(5);
+		gt_wait(2);
 
-		spi_read_req(tx, sizeof(tx), 0x10000);
+		gt_spi_read_req(tx, sizeof(tx), 0x10000);
 		spi_xfer(tx, rx, 16);
-		int ok = 1;
+		bool ok = true;
 		for (int i = 0; i < 8; i++) {
 			if (rx[8 + i] != 0xaa) {
-				ok = 0;
+				ok = false;
 				break;
 			}
 		}
 		if (ok) {
 			return true;
 		}
-		gt_wait(5);
+		gt_wait(10);
 	}
 	return false;
 }
@@ -385,7 +632,7 @@ gt_version_ok(void)
 	uint8_t tx[40], rx[40];
 	uint32_t sum = 0;
 
-	spi_read_req(tx, sizeof(tx), 0x10014);
+	gt_spi_read_req(tx, sizeof(tx), 0x10014);
 	spi_xfer(tx, rx, 36);
 	for (int i = 0; i < 26; i++) {
 		sum += rx[8 + i];
@@ -398,10 +645,88 @@ gt_version_ok(void)
 }
 
 static bool
+gt_head_ok(const uint8_t *d)
+{
+	uint32_t sum = 0;
+	for (int i = 0; i < 6; i++) {
+		sum += d[i];
+	}
+	return (sum & 0xffffu) == (uint32_t)(d[6] | ((uint32_t)d[7] << 8));
+}
+
+static int
+gt_frame(void)
+{
+	uint8_t tx[40], rx[40];
+	const uint8_t *d = &rx[8];
+	uint32_t nz = 0, n, mask = 0, sum = 0;
+
+	gt_spi_read_req(tx, sizeof(tx), 0x10308);
+	spi_xfer(tx, rx, 34);
+
+	for (int i = 0; i < 8; i++) {
+		nz |= d[i];
+	}
+	if (!nz || !gt_head_ok(d)) {
+		return EAGAIN;
+	}
+	if (!(d[0] & 0x80u)) {
+		gt_clear_sync();
+		return EAGAIN;
+	}
+	n = d[2] & 0x0fu;
+	if (n > 2u) {
+		gt_clear_sync();
+		return EIO;
+	}
+
+	if (n) {
+		for (int i = 8; i < 8 + (int)n * 8; i++) {
+			sum += d[i];
+		}
+		if ((sum & 0xffffu) != (uint32_t)(d[8 + n * 8] | ((uint32_t)d[8 + n * 8 + 1] << 8))) {
+			gt_clear_sync();
+			return EIO;
+		}
+		for (uint32_t i = 0; i < n; i++) {
+			const uint8_t *p = d + 8 + i * 8;
+			uint32_t id = (uint32_t)(p[0] >> 4);
+			uint32_t type = (uint32_t)(p[0] & 0x0fu);
+
+			if (id >= GT_MAX || (mask & (1u << id)) || type == 1u || type == 3u) {
+				gt_clear_sync();
+				return EIO;
+			}
+			uint32_t x = ((uint32_t)p[2] | ((uint32_t)p[3] << 8)) / 10u;
+			uint32_t y = ((uint32_t)p[4] | ((uint32_t)p[5] << 8)) / 10u;
+			if (x > 1079u) x = 1079u;
+			if (y > 2399u) y = 2399u;
+			mask |= (1u << id);
+			gt.x[id] = x;
+			gt.y[id] = y;
+		}
+	}
+	gt_clear_sync();
+	touch_commit_mask(mask);
+	return 0;
+}
+
+/* =========================================================================
+ * Shared hardware power-up and chip auto-detection
+ * ========================================================================= */
+
+static bool
 gt_hw_init(void)
 {
 	uint8_t en3 = 0, en2 = 0, v3 = 0, v2 = 0;
 	uint32_t v;
+
+	/* Hold reset GPIO15 low before toggling rails (matches fts_power_source_ctrl). */
+	v = gt_rd(GT_MODE(1));
+	gt_wr(GT_MODE(1), v & ~(0xfu << 28));
+	gt_wr(GT_RESET_DIR, gt_rd(GT_RESET_DIR) | GT_RESET);
+	gt_wr(GT_RESET_DO, gt_rd(GT_RESET_DO) & ~GT_RESET);
+	gt_wait(2);
 
 	/* I2C5 pins 132/133 -> GPIO open-drain */
 	v = gt_rd(GT_I2C_MODE);
@@ -448,7 +773,7 @@ gt_hw_init(void)
 		return false;
 	}
 
-	/* IOVDD switch GPIO110 high, then VMC 1.8 V (LDO3) and VTP 3.3 V (LDO2). */
+	/* DVDD/IOVDD switch GPIO110 high, then VMC 1.8 V (LDO3) and VTP 3.3 V (LDO2). */
 	v = gt_rd(GT_MODE(13));
 	gt_wr(GT_MODE(13), v & ~(0xfu << 24));
 	gt_wr(GT_IOVDD_DIR, gt_rd(GT_IOVDD_DIR) | GT_IOVDD);
@@ -470,136 +795,32 @@ gt_hw_init(void)
 	}
 	gt_wait(15);
 
-	/* Reset GPIO15 pinmux -> GPIO; SPI3 pins 160-163 -> GPIO (CS high, CLK/MO low). */
-	v = gt_rd(GT_MODE(1));
-	gt_wr(GT_MODE(1), v & ~(0xfu << 28));
+	/* SPI3 pins 160-163 -> GPIO (CS high, CLK/MO low, MI input). */
 	v = gt_rd(GT_SPI_MODE);
 	gt_wr(GT_SPI_MODE, v & ~0xffffu);
 	v = gt_rd(GT_SPI_DIR);
 	gt_wr(GT_SPI_DIR, (v & ~0x0fu) | (GT_MO | GT_CS | GT_CLK));
 	v = gt_rd(GT_SPI_DO);
 	gt_wr(GT_SPI_DO, (v & ~0x0fu) | GT_CS);
-	gt_udelay(20);
+	gt_udelay(50);
 
-	/* Reset pulse: low 10 ms, high 100 ms. */
-	gt_wr(GT_RESET_DIR, gt_rd(GT_RESET_DIR) | GT_RESET);
-	gt_wr(GT_RESET_DO, gt_rd(GT_RESET_DO) & ~GT_RESET);
-	gt_wait(10);
-	gt_wr(GT_RESET_DO, gt_rd(GT_RESET_DO) | GT_RESET);
-	gt_wait(100);
+	/* Release reset and wait 200 ms for FT3680 / GT9916R flash firmware startup. */
+	touch_reset_pulse(10, 200);
 
-	if (!gt_dev_confirm()) {
-		printf("mtk_touch: Goodix dev_confirm failed\n");
-		return false;
-	}
-	if (!gt_version_ok()) {
-		printf("mtk_touch: Goodix BERLIN version/checksum failed\n");
-		return false;
-	}
-	printf("mtk_touch: detected Goodix GT9916R (BERLIN) 1080x2400 rails=%02x/%02x\n", en3, en2);
-	return true;
-}
-
-static bool
-gt_head_ok(const uint8_t *d)
-{
-	uint32_t sum = 0;
-	for (int i = 0; i < 6; i++) {
-		sum += d[i];
-	}
-	return (sum & 0xffffu) == (uint32_t)(d[6] | ((uint32_t)d[7] << 8));
-}
-
-static void
-gt_release_all(void)
-{
-	for (uint32_t i = 0; i < GT_MAX; i++) {
-		if (gt.active & (1u << i)) {
-			hakios_touch_post(HAKIOS_TOUCH_UP, i, gt.x[i], gt.y[i]);
-		}
-	}
-	gt.active = 0;
-}
-
-static int
-gt_frame(void)
-{
-	uint8_t tx[40], rx[40];
-	const uint8_t *d = &rx[8];
-	uint32_t nz = 0, n, mask = 0, sum = 0;
-
-	spi_read_req(tx, sizeof(tx), 0x10308);
-	spi_xfer(tx, rx, 34);
-
-	for (int i = 0; i < 8; i++) {
-		nz |= d[i];
-	}
-	if (!nz || !gt_head_ok(d)) {
-		return EAGAIN;
-	}
-	if (!(d[0] & 0x80u)) {
-		gt_clear_sync();
-		return EAGAIN;
-	}
-	n = d[2] & 0x0fu;
-	if (n > 2u) {
-		gt_clear_sync();
-		return EIO;
+	if (fts_probe(en3, en2)) {
+		return true;
 	}
 
-	if (n) {
-		for (int i = 8; i < 8 + (int)n * 8; i++) {
-			sum += d[i];
-		}
-		if ((sum & 0xffffu) != (uint32_t)(d[8 + n * 8] | ((uint32_t)d[8 + n * 8 + 1] << 8))) {
-			gt_clear_sync();
-			return EIO;
-		}
-		for (uint32_t i = 0; i < n; i++) {
-			const uint8_t *p = d + 8 + i * 8;
-			uint32_t id = (uint32_t)(p[0] >> 4);
-			uint32_t type = (uint32_t)(p[0] & 0x0fu);
-
-			if (id >= GT_MAX || (mask & (1u << id)) || type == 1u || type == 3u) {
-				gt_clear_sync();
-				return EIO;
-			}
-			uint32_t x = ((uint32_t)p[2] | ((uint32_t)p[3] << 8)) / 10u;
-			uint32_t y = ((uint32_t)p[4] | ((uint32_t)p[5] << 8)) / 10u;
-			if (x > 1079u) x = 1079u;
-			if (y > 2399u) y = 2399u;
-			mask |= (1u << id);
-			gt.x[id] = x;
-			gt.y[id] = y;
-		}
+	/* Fallback: Goodix GT9916R */
+	touch_reset_pulse(10, 100);
+	if (gt_dev_confirm() && gt_version_ok()) {
+		printf("mtk_touch: detected Goodix GT9916R (BERLIN) 1080x2400 rails=%02x/%02x\n", en3, en2);
+		gt.chip = CHIP_GOODIX;
+		return true;
 	}
-	gt_clear_sync();
 
-	for (uint32_t i = 0; i < GT_MAX; i++) {
-		bool now = (mask & (1u << i)) != 0;
-		bool was = (gt.active & (1u << i)) != 0;
-		if (now && !was) {
-			gt.prev_x[i] = gt.x[i];
-			gt.prev_y[i] = gt.y[i];
-			if (gt.log) {
-				printf("mtk_touch: down f=%u x=%u y=%u\n", i, gt.x[i], gt.y[i]);
-			}
-			hakios_touch_post(HAKIOS_TOUCH_DOWN, i, gt.x[i], gt.y[i]);
-		} else if (now && was) {
-			if (gt.x[i] != gt.prev_x[i] || gt.y[i] != gt.prev_y[i]) {
-				gt.prev_x[i] = gt.x[i];
-				gt.prev_y[i] = gt.y[i];
-				hakios_touch_post(HAKIOS_TOUCH_MOVE, i, gt.x[i], gt.y[i]);
-			}
-		} else if (!now && was) {
-			if (gt.log) {
-				printf("mtk_touch: up f=%u x=%u y=%u\n", i, gt.x[i], gt.y[i]);
-			}
-			hakios_touch_post(HAKIOS_TOUCH_UP, i, gt.x[i], gt.y[i]);
-		}
-	}
-	gt.active = mask;
-	return 0;
+	printf("mtk_touch: neither FocalTech FT3680 nor Goodix GT9916R responded\n");
+	return false;
 }
 
 static void
@@ -615,9 +836,10 @@ gt_thread(__unused void *arg, __unused wait_result_t wr)
 	}
 
 	for (;;) {
-		if (gt_frame() != 0) {
-			if (++bad >= 50) {
-				gt_release_all();
+		int rc = (gt.chip == CHIP_FTS) ? fts_frame() : gt_frame();
+		if (rc != 0) {
+			if (rc == EIO && ++bad >= 50) {
+				touch_release_all();
 				bad = 0;
 			}
 		} else {
@@ -638,19 +860,21 @@ hakios_mtk_touch_init(void)
 		return;
 	}
 	gt.started = true;
-	PE_parse_boot_argn("touchlog", &gt.log, sizeof(gt.log));
 
-	gt.gpio = ml_io_map(GT_GPIO_PA, 0x1000UL);
-	if (!gt.gpio) {
-		printf("mtk_touch: GPIO map failed\n");
-		return;
+	int log_arg = 0;
+	if (PE_parse_boot_argn("touchlog", &log_arg, sizeof(log_arg)) && log_arg != 0) {
+		gt.log = true;
 	}
 
-	thread_t th;
-	kern_return_t kr = kernel_thread_start(gt_thread, NULL, &th);
-	if (kr == KERN_SUCCESS) {
+	vm_offset_t va = ml_io_map(GT_GPIO_PA, 0x1000);
+	if (!va) {
+		printf("mtk_touch: ml_io_map(GPIO) failed\n");
+		return;
+	}
+	gt.gpio = (volatile uint32_t *)va;
+
+	thread_t th = THREAD_NULL;
+	if (kernel_thread_start(gt_thread, NULL, &th) == KERN_SUCCESS && th != THREAD_NULL) {
 		thread_deallocate(th);
-	} else {
-		printf("mtk_touch: thread start failed (%d)\n", kr);
 	}
 }

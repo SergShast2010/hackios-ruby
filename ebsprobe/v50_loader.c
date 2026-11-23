@@ -721,7 +721,7 @@ __attribute__((noinline, noreturn)) void V50BootPhysical(struct v50_ctx *ctx) {
     if (ctx->is_qemu) {
         append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "virtio_input=1 keylog=1 touchlog=1 hello_wait=6");
     } else {
-        append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "buttons=2 keylog=1 touchscreen=2 touchlog=1 mtk_ufs_ro=1 hello_wait=25");
+        append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "buttons=2 keylog=1 touchscreen=2 touchlog=1 mtk_ufs_ro=1 mtk_ram_diag=1 hello_wait=25");
     }
 
     uint64_t entry_pa = ctx->entry_va + slide;
@@ -766,11 +766,11 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
     int real_panic = valid_log && sfind_n(log, log_len, "panic(") && !sfind_n(log, log_len, "INPUT SUMMARY:") && !sfind_n(log, log_len, "mtk_ram_diag:");
 
     if (hello_ok && !real_panic) {
-        ui_line(ctx, 0, "RUBY v0.53c: XNU SMP+INPUT+UFS PASS!", COL_GREEN);
+        ui_line(ctx, 0, "RUBY v0.53d: XNU SMP+INPUT+UFS PASS!", COL_GREEN);
     } else if (real_panic) {
-        ui_line(ctx, 0, "RUBY v0.53c: XNU PANIC (SEE LOG)", COL_RED);
+        ui_line(ctx, 0, "RUBY v0.53d: XNU PANIC (SEE LOG)", COL_RED);
     } else {
-        ui_line(ctx, 0, "RUBY v0.53c: XNU RETURNED (SEE LOG)", COL_YELLOW);
+        ui_line(ctx, 0, "RUBY v0.53d: XNU RETURNED (SEE LOG)", COL_YELLOW);
     }
     ui_hex(ctx, 1, "RAMbase: ", ctx->xnu_phys_base, COL_WHITE);
     ui_hex(ctx, 2, "RAMsize: ", ctx->xnu_mem_size, ctx->ram_probe_fail_pa ? COL_YELLOW : COL_GREEN);
@@ -804,32 +804,47 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
     /* Render tail of XNU's loader_log with line wrapping so nothing clips off the right edge. */
     if (valid_log && ctx->fb_base) {
         uint32_t y_start = (reason == 1 || ctx->ram_probe_fail_pa || !hello_ok) ? 376u : 320u;
-        /* Show mtk_buttons / mtk_touch / mtk_ufs_ro / virtio-input diag lines at top of log pane */
+        /* Show mtk_ram_diag first (always visible), then key touch/UFS/buttons init lines */
         if (reason != 1) {
             uint32_t shown = 0;
-            uint64_t scan = 0;
-            while (scan < log_len && shown < 20u && y_start + 56u < ctx->fb_height) {
-                uint64_t ls = scan;
-                while (scan < log_len && log[scan] != '\n') scan++;
-                uint64_t ll = scan - ls;
-                if (scan < log_len && log[scan] == '\n') scan++;
-                if (ll > 0 && (sfind_n(log + ls, ll, "mtk_buttons:") ||
-                               sfind_n(log + ls, ll, "mtk_touch:") ||
-                               sfind_n(log + ls, ll, "mtk_ufs_ro:") ||
-                               sfind_n(log + ls, ll, "mtk_ram_diag:") ||
-                               sfind_n(log + ls, ll, "virtio-input:"))) {
-                    char lbuf[96];
-                    uint32_t ln = 0;
-                    uint64_t copy = ll < 88u ? ll : 88u;
-                    for (uint64_t k = 0; k < copy; k++) {
-                        char c = log[ls + k];
-                        if (c >= 32 && c < 127) lbuf[ln++] = c;
+            for (int pass = 0; pass < 2; pass++) {
+                uint64_t scan = 0;
+                while (scan < log_len && shown < 18u && y_start + 56u < ctx->fb_height) {
+                    uint64_t ls = scan;
+                    while (scan < log_len && log[scan] != '\n') scan++;
+                    uint64_t ll = scan - ls;
+                    if (scan < log_len && log[scan] == '\n') scan++;
+                    if (ll == 0) continue;
+                    int match = 0;
+                    if (pass == 0) {
+                        match = sfind_n(log + ls, ll, "mtk_ram_diag:");
+                    } else {
+                        if (sfind_n(log + ls, ll, "mtk_touch:")) {
+                            match = 1;
+                        } else if (sfind_n(log + ls, ll, "mtk_buttons: ready") ||
+                                   sfind_n(log + ls, ll, "virtio-input:")) {
+                            match = 1;
+                        } else if (sfind_n(log + ls, ll, "mtk_ufs_ro:") &&
+                                   (sfind_n(log + ls, ll, "ver=") ||
+                                    sfind_n(log + ls, ll, "LUN2") ||
+                                    sfind_n(log + ls, ll, "userdata"))) {
+                            match = 1;
+                        }
                     }
-                    lbuf[ln] = 0;
-                    uint32_t col = (sfind_n(lbuf, ln, "detected") || sfind_n(lbuf, ln, "ready") || sfind_n(lbuf, ln, "GPT OK") || sfind_n(lbuf, ln, "CLEAN")) ? COL_GREEN : (sfind_n(lbuf, ln, "SERROR") ? COL_RED : COL_CYAN);
-                    fb_draw_text(ctx, 16u, y_start, 2u, lbuf, col, 0u);
-                    y_start += 26u;
-                    shown++;
+                    if (match) {
+                        char lbuf[96];
+                        uint32_t ln = 0;
+                        uint64_t copy = ll < 88u ? ll : 88u;
+                        for (uint64_t k = 0; k < copy; k++) {
+                            char c = log[ls + k];
+                            if (c >= 32 && c < 127) lbuf[ln++] = c;
+                        }
+                        lbuf[ln] = 0;
+                        uint32_t col = (sfind_n(lbuf, ln, "detected") || sfind_n(lbuf, ln, "ready") || sfind_n(lbuf, ln, "GPT OK") || sfind_n(lbuf, ln, "CLEAN")) ? COL_GREEN : ((sfind_n(lbuf, ln, "SERROR") || sfind_n(lbuf, ln, "miss") || sfind_n(lbuf, ln, "failed")) ? COL_RED : COL_CYAN);
+                        fb_draw_text(ctx, 16u, y_start, 2u, lbuf, col, 0u);
+                        y_start += 26u;
+                        shown++;
+                    }
                 }
             }
             if (shown) y_start += 8u;
@@ -1122,7 +1137,7 @@ efi_status EFIAPI efi_main(efi_handle image, efi_system_table *st) {
         ctx.fb_pitch = (uint64_t)ctx.fb_stride_px * 4ULL;
     }
     fb_clear(&ctx);
-    ui_line(&ctx, 0, "ruby v0.53c - HakiOS SMP + Input + RO-UFS + RAMdiag", COL_GREEN);
+    ui_line(&ctx, 0, "ruby v0.53d - HakiOS SMP + Input + RO-UFS + RAMdiag", COL_GREEN);
 
     uint64_t el = 0;
     __asm__ volatile("mrs %0, CurrentEL" : "=r"(el));
