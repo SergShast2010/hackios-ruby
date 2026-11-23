@@ -768,11 +768,11 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
     int real_panic = valid_log && sfind_n(log, log_len, "panic(") && !sfind_n(log, log_len, "PID 1 DONE") && !sfind_n(log, log_len, "INPUT SUMMARY:");
 
     if (hello_ok && !real_panic) {
-        ui_line(ctx, 0, "RUBY v0.55a: XNU 4GB+SMP+UFS+USB PASS!", COL_GREEN);
+        ui_line(ctx, 0, "RUBY v0.55b: XNU 4GB+SMP+UFS+USB PASS!", COL_GREEN);
     } else if (real_panic) {
-        ui_line(ctx, 0, "RUBY v0.55a: XNU PANIC (SEE LOG)", COL_RED);
+        ui_line(ctx, 0, "RUBY v0.55b: XNU PANIC (SEE LOG)", COL_RED);
     } else {
-        ui_line(ctx, 0, "RUBY v0.55a: XNU RETURNED (SEE LOG)", COL_YELLOW);
+        ui_line(ctx, 0, "RUBY v0.55b: XNU RETURNED (SEE LOG)", COL_YELLOW);
     }
     ui_hex(ctx, 1, "RAMbase: ", ctx->xnu_phys_base, COL_WHITE);
     ui_hex(ctx, 2, "RAMsize: ", ctx->xnu_mem_size, ctx->ram_probe_fail_pa ? COL_YELLOW : COL_GREEN);
@@ -978,7 +978,7 @@ __attribute__((noinline, noreturn)) void V50OnException(
     ctx->physical = 1;
     g_con = NULL;
     fb_clear(ctx);
-    ui_line(ctx, 0, "RUBY v0.55a: EARLY LOADER EXCEPTION", COL_RED);
+    ui_line(ctx, 0, "RUBY v0.55b: EARLY LOADER EXCEPTION", COL_RED);
     ui_hex(ctx, 2, "Vector: ", vec, COL_YELLOW);
     ui_hex(ctx, 3, "ESR:    ", esr, COL_RED);
     ui_hex(ctx, 4, "ELR:    ", elr, COL_WHITE);
@@ -1143,7 +1143,7 @@ efi_status EFIAPI efi_main(efi_handle image, efi_system_table *st) {
         ctx.fb_pitch = (uint64_t)ctx.fb_stride_px * 4ULL;
     }
     fb_clear(&ctx);
-    ui_line(&ctx, 0, "ruby v0.55a - HakiOS 4 GiB + 8C + UFS + USB ECM", COL_GREEN);
+    ui_line(&ctx, 0, "ruby v0.55b - HakiOS 4 GiB + 8C + UFS + USB ECM", COL_GREEN);
 
     uint64_t el = 0;
     __asm__ volatile("mrs %0, CurrentEL" : "=r"(el));

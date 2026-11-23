@@ -76,19 +76,24 @@ extern void gic_v3_spi_detach(uint32_t intid);
 
 #define U2_OTG_SEL          (1u << 7)
 
-/* ---- TPHY v2 registers (base 0x11e40000) ------------------------------------------------------- */
+/* ---- TPHY v2 registers (base 0x11e40000, verified MT6877 layout) ------------------------------- */
 
-#define PHY_U2_COM0         0x0300u
-#define PHY_U2_COM1         0x0304u
-#define PHY_U2_ACR0         0x0310u
-#define PHY_U2_ACR1         0x0314u
+#define IPPC_OTG_STS        0x0018u
+#define OTG_VBUS_VALID      (1u << 9)
+#define U3_DUAL_MODE        (1u << 7)
+#define U3_HOST_SEL         (1u << 2)
+
+#define PHY_U2_ACR0         0x0300u
+#define PHY_U2_ACR5         0x0314u
+#define PHY_U2_ACR6         0x0318u
 #define PHY_U2_ACR3         0x031cu
 #define PHY_U2_ACR4         0x0320u
-#define PHY_U2_ACR5         0x0324u
-#define PHY_U2_ACR6         0x0318u
 #define PHY_U2_DTM0         0x0368u
 #define PHY_U2_DTM1         0x036cu
-#define PHY_U3_CHIP         0x0700u
+#define PHY_U3_SPLLC        0x0700u
+#define PHY_U3_CHIP         0x0800u
+#define PHY_U3_PHYA         0x0b00u
+#define PHY_U3_PHYA_DA0     (PHY_U3_PHYA + 0x0100u)
 
 #define DTM0_FORCE_UART_EN  (1u << 26)
 #define DTM0_FORCE_DATAIN   (1u << 23)
@@ -105,31 +110,24 @@ extern void gic_v3_spi_detach(uint32_t intid);
 #define DTM0_RG_DP_PD       (1u << 6)
 #define DTM0_RG_DM_PD       (1u << 7)
 #define DTM0_PART_MASK      (DTM0_FORCE_DATAIN | DTM0_FORCE_DM_PD | DTM0_FORCE_DP_PD | \
-                             DTM0_FORCE_XCVRSEL | DTM0_FORCE_TERMSEL | DTM0_RG_DP_PD | DTM0_RG_DM_PD)
+                             DTM0_FORCE_XCVRSEL | DTM0_FORCE_SUSPENDM | DTM0_FORCE_TERMSEL | \
+                             DTM0_RG_DP_PD | DTM0_RG_DM_PD | DTM0_RG_TERMSEL)
 
-#define DTM1_FORCE_VBUSVAL  (1u << 13)
-#define DTM1_FORCE_SESSEND  (1u << 12)
-#define DTM1_FORCE_BVALID   (1u << 11)
-#define DTM1_FORCE_AVALID   (1u << 10)
 #define DTM1_FORCE_IDDIG    (1u << 9)
 #define DTM1_RG_VBUSVALID   (1u << 5)
 #define DTM1_RG_SESSEND     (1u << 4)
-#define DTM1_RG_BVALID      (1u << 3)
 #define DTM1_RG_AVALID      (1u << 2)
 #define DTM1_RG_IDDIG       (1u << 1)
 #define DTM1_UART_EN        (1u << 16)
 
 #define ACR0_INTR_EN        (1u << 5)
-#define ACR1_VRT_MSK        (0x7u << 12)
-#define ACR1_TERM_MSK       (0x7u << 8)
 #define ACR3_PUPD_BIST_EN   (1u << 12)
 #define ACR3_EN_PU_DP       (1u << 9)
+#define ACR4_GPIO_CTL       (1u << 9)
 #define ACR4_GPIO_MODE      (1u << 8)
-#define ACR5_HS_100U_U3_EN  (1u << 5)
-#define ACR6_REV6_MSK       (0x3u << 30)
-#define ACR6_DISC_MSK       (0xfu << 4)
-#define ACR6_SQTH_MSK       (0xfu << 0)
-#define COM1_OTG_VBUSCMP_EN (1u << 20)
+#define ACR5_HS_100U_U3_EN  (1u << 11)
+#define ACR6_BC11_SW_EN     (1u << 23)
+#define ACR6_OTG_VBUSCMP_EN (1u << 20)
 
 /* ---- MTU3 MAC / EP / QMU registers (base 0x11201000) ------------------------------------------- */
 
@@ -159,12 +157,14 @@ extern void gic_v3_spi_detach(uint32_t intid);
 #define EP0CSR_OFF          0x0100u
 #define RXCOUNT0_OFF        0x0108u
 #define EP0_MAXPKTSZ_MSK    0x03ffu
-#define EP0_TXPKTRDY        (1u << 16)
-#define EP0_RXPKTRDY        (1u << 17)
-#define EP0_SETUPPKTRDY     (1u << 18)
+#define EP0_RXPKTRDY        (1u << 16)
+#define EP0_SETUPPKTRDY     (1u << 17)
+#define EP0_TXPKTRDY        (1u << 18)
 #define EP0_DATAEND         (1u << 19)
-#define EP0_SENDSTALL       (1u << 20)
+#define EP0_DPHTX           (1u << 20)
 #define EP0_SENTSTALL       (1u << 22)
+#define EP0_FIFOFULL        (1u << 23)
+#define EP0_SENDSTALL       (1u << 25)
 #define EP0_W1C_BITS        (~(EP0_RXPKTRDY | EP0_SETUPPKTRDY | EP0_SENTSTALL))
 
 #define TX1CSR0_OFF         0x0110u
@@ -225,8 +225,8 @@ extern void gic_v3_spi_detach(uint32_t intid);
 #define RQERRIESR1_OFF      0x07d8u
 
 #define QMU_Q_START         (1u << 0)
-#define QMU_Q_STOP          (1u << 1)
-#define QMU_Q_RESUME        (1u << 2)
+#define QMU_Q_RESUME        (1u << 1)
+#define QMU_Q_STOP          (1u << 2)
 #define QMU_Q_ACTIVE        (1u << 15)
 
 #define QMU_TX1_DONE        (1u << 1)
@@ -247,13 +247,13 @@ extern void gic_v3_spi_detach(uint32_t intid);
 #define QMU_TX1_CS_ERR      (1u << 1)
 #define QMU_TX1_LEN_ERR     (1u << 17)
 
-/* Device / MAC2 / MAC3 registers */
+/* Device / MAC2 / MAC3 registers (verified MT6877 MTU3 offsets) */
+#define DEV_CONF_OFF        0x0800u
 #define MISC_CTRL_OFF       0x0c84u
-#define DEV_CONF_OFF        0x0e00u
-#define USB3_CONFIG_OFF     0x1400u
+#define USB3_CONFIG_OFF     0x141cu
 #define MAC2_PM_CTRL_OFF    0x2404u
-#define MAC2_INTR_EN_OFF    0x240cu
-#define MAC2_INTR_STS_OFF   0x2410u
+#define MAC2_INTR_EN_OFF    0x2418u
+#define MAC2_INTR_STS_OFF   0x241cu
 #define MAC2_INTR_SUSPEND   (1u << 0)
 #define MAC2_INTR_RESUME    (1u << 1)
 #define MAC2_INTR_RESET     (1u << 2)
@@ -295,6 +295,13 @@ static inline void
 wr8(vm_offset_t base, uint32_t off, uint8_t val)
 {
 	*(volatile uint8_t *)(base + off) = val;
+	__asm__ volatile ("dsb sy\n" ::: "memory");
+}
+
+static inline void
+wr16(vm_offset_t base, uint32_t off, uint16_t val)
+{
+	*(volatile uint16_t *)(base + off) = val;
 	__asm__ volatile ("dsb sy\n" ::: "memory");
 }
 
@@ -505,81 +512,26 @@ u3_phy_on(vm_offset_t phy)
 {
 	uint32_t v;
 
-	v = rd32(phy, PHY_U3_CHIP + 0x00);
-	v |= (1u << 26);                            /* RG_USB20_VA_ON */
-	wr32(phy, PHY_U3_CHIP + 0x00, v);
+	v = rd32(phy, PHY_U3_PHYA + 0x04u);         /* RG_SSUSB_VA_ON */
+	v |= (1u << 29);
+	wr32(phy, PHY_U3_PHYA + 0x04u, v);
 
-	v = rd32(phy, PHY_U3_CHIP + 0x44);
-	v |= (1u << 31);                            /* DA_SSUSB_XTAL_RX_PWD */
-	wr32(phy, PHY_U3_CHIP + 0x44, v);
+	v = rd32(phy, PHY_U3_SPLLC + 0x18u);        /* XTAL RX */
+	v |= (1u << 9) | (1u << 8);
+	wr32(phy, PHY_U3_SPLLC + 0x18u, v);
 
-	v = rd32(phy, PHY_U3_CHIP + 0x3c);
-	v |= (0x3u << 10);                          /* RG_SSUSB_XTAL_EXT_EN_U3 */
-	wr32(phy, PHY_U3_CHIP + 0x3c, v);
+	v = rd32(phy, PHY_U3_PHYA_DA0);             /* XTAL_EXT_EN_U3 */
+	v &= ~(0x3u << 10);
+	v |= (2u << 10);
+	wr32(phy, PHY_U3_PHYA_DA0, v);
 
-	v = rd32(phy, PHY_U3_CHIP + 0x0c);
-	v &= ~((1u << 31) | (1u << 29));            /* release IP/U3 reset */
-	wr32(phy, PHY_U3_CHIP + 0x0c, v);
+	v = rd32(phy, PHY_U3_CHIP + 0x0cu);         /* release IP reset */
+	v &= ~((1u << 31) | (1u << 29));
+	wr32(phy, PHY_U3_CHIP + 0x0cu, v);
 
-	v = rd32(phy, PHY_U3_CHIP + 0x10);
-	v &= ~(1u << 25);                           /* release PHYD reset */
-	wr32(phy, PHY_U3_CHIP + 0x10, v);
-}
-
-static void
-u2_phy_off(vm_offset_t phy)
-{
-	uint32_t v;
-
-	v = rd32(phy, PHY_U2_DTM0);
-	v &= ~(DTM0_PART_MASK | DTM0_RG_XCVRSEL_MSK | DTM0_RG_DATAIN_MSK);
-	wr32(phy, PHY_U2_DTM0, v);
-
-	v = rd32(phy, PHY_U2_DTM0);
-	v |= DTM0_FORCE_SUSPENDM;
-	v |= DTM0_RG_SUSPENDM;
-	wr32(phy, PHY_U2_DTM0, v);
-
-	v = rd32(phy, PHY_U2_DTM0);
-	v &= ~DTM0_RG_XCVRSEL_MSK;
-	v |= DTM0_RG_XCVRSEL_VAL(1);
-	v |= DTM0_RG_TERMSEL;
-	wr32(phy, PHY_U2_DTM0, v);
-
-	v = rd32(phy, PHY_U2_DTM0);
-	v &= ~DTM0_RG_DATAIN_MSK;
-	v |= DTM0_RG_DP_PD | DTM0_RG_DM_PD;
-	wr32(phy, PHY_U2_DTM0, v);
-
-	v = rd32(phy, PHY_U2_DTM0);
-	v |= DTM0_FORCE_XCVRSEL | DTM0_FORCE_TERMSEL | DTM0_FORCE_DATAIN |
-	    DTM0_FORCE_DP_PD | DTM0_FORCE_DM_PD;
-	wr32(phy, PHY_U2_DTM0, v);
-
-	v = rd32(phy, PHY_U2_COM1);
-	v &= ~COM1_OTG_VBUSCMP_EN;
-	wr32(phy, PHY_U2_COM1, v);
-
-	v = rd32(phy, PHY_U2_DTM1);
-	v &= ~(DTM1_RG_VBUSVALID | DTM1_RG_AVALID);
-	v |= DTM1_RG_SESSEND;
-	wr32(phy, PHY_U2_DTM1, v);
-
-	v = rd32(phy, PHY_U2_DTM1);
-	v |= DTM1_FORCE_VBUSVAL | DTM1_FORCE_AVALID | DTM1_FORCE_SESSEND;
-	wr32(phy, PHY_U2_DTM1, v);
-
-	v = rd32(phy, PHY_U2_ACR6);
-	v = (v & ~ACR6_REV6_MSK) | (1u << 30);
-	wr32(phy, PHY_U2_ACR6, v);
-
-	delay(800);
-
-	v = rd32(phy, PHY_U2_DTM0);
-	v &= ~DTM0_RG_SUSPENDM;
-	wr32(phy, PHY_U2_DTM0, v);
-
-	delay(1);
+	v = rd32(phy, PHY_U3_CHIP + 0x10u);         /* release PHYD reset */
+	v &= ~((1u << 25) | (1u << 24));
+	wr32(phy, PHY_U3_CHIP + 0x10u, v);
 }
 
 static void
@@ -587,10 +539,10 @@ u2_phy_on(vm_offset_t phy)
 {
 	uint32_t v;
 
-	/* instance_init */
+	/* u2_phy_instance_init (tphy v2, verified on ruby MT6877) */
 	v = rd32(phy, PHY_U2_DTM0);
-	v &= ~(DTM0_FORCE_UART_EN | DTM0_RG_XCVRSEL_MSK);
-	v |= DTM0_RG_XCVRSEL_VAL(1);
+	v &= ~(DTM0_FORCE_UART_EN | DTM0_FORCE_SUSPENDM);
+	v |= (1u << 4);                             /* XCVRSEL = 1 */
 	wr32(phy, PHY_U2_DTM0, v);
 
 	v = rd32(phy, PHY_U2_DTM1);
@@ -606,74 +558,56 @@ u2_phy_on(vm_offset_t phy)
 	wr32(phy, PHY_U2_ACR5, v);
 
 	v = rd32(phy, PHY_U2_ACR4);
-	v &= ~ACR4_GPIO_MODE;
+	v &= ~(ACR4_GPIO_CTL | ACR4_GPIO_MODE);
 	wr32(phy, PHY_U2_ACR4, v);
 
 	v = rd32(phy, PHY_U2_ACR6);
-	v = (v & ~ACR6_SQTH_MSK) | 2u;
+	v &= ~(ACR6_BC11_SW_EN | 0xfu);
+	v |= 2u;                                    /* SQTH = 2 */
 	wr32(phy, PHY_U2_ACR6, v);
 
-	/* Cold cycle so analog state is deterministic regardless of bootloader */
-	u2_phy_off(phy);
-	delay(2000);
-
-	/* ruby live FDT eye tuning: vrt=6, term=3, rev6=2, disc=0xd (13), sqth=2 */
-	v = rd32(phy, PHY_U2_ACR1);
-	v = (v & ~(ACR1_VRT_MSK | ACR1_TERM_MSK)) | (6u << 12) | (3u << 8);
-	wr32(phy, PHY_U2_ACR1, v);
-
-	v = rd32(phy, PHY_U2_ACR6);
-	v = (v & ~(ACR6_REV6_MSK | ACR6_DISC_MSK | ACR6_SQTH_MSK)) |
-	    (2u << 30) | (13u << 4) | 2u;
-	wr32(phy, PHY_U2_ACR6, v);
-
-	/* power_on */
+	/* u2_phy_instance_power_on */
 	v = rd32(phy, PHY_U2_DTM0);
-	v &= ~DTM0_FORCE_UART_EN;
 	v |= DTM0_FORCE_SUSPENDM;
 	wr32(phy, PHY_U2_DTM0, v);
-
-	v = rd32(phy, PHY_U2_DTM0);
-	v &= ~DTM0_RG_XCVRSEL_MSK;
-	wr32(phy, PHY_U2_DTM0, v);
-
-	v = rd32(phy, PHY_U2_DTM0);
-	v &= ~DTM0_RG_DATAIN_MSK;
-	wr32(phy, PHY_U2_DTM0, v);
-
 	v = rd32(phy, PHY_U2_DTM0);
 	v &= ~DTM0_RG_SUSPENDM;
 	wr32(phy, PHY_U2_DTM0, v);
-	delay(10);
-
 	v = rd32(phy, PHY_U2_DTM0);
 	v |= DTM0_RG_SUSPENDM;
 	wr32(phy, PHY_U2_DTM0, v);
 	delay(30);
-
-	v = rd32(phy, PHY_U2_DTM0);
-	v &= ~(DTM0_FORCE_XCVRSEL | DTM0_FORCE_TERMSEL | DTM0_FORCE_DATAIN |
-	    DTM0_FORCE_DP_PD | DTM0_FORCE_DM_PD | DTM0_RG_TERMSEL |
-	    DTM0_RG_DP_PD | DTM0_RG_DM_PD);
-	wr32(phy, PHY_U2_DTM0, v);
-
-	v = rd32(phy, PHY_U2_COM1);
-	v |= COM1_OTG_VBUSCMP_EN;
-	wr32(phy, PHY_U2_COM1, v);
-
-	v = rd32(phy, PHY_U2_DTM1);
-	v &= ~(DTM1_FORCE_VBUSVAL | DTM1_FORCE_AVALID | DTM1_FORCE_SESSEND |
-	    DTM1_RG_SESSEND);
-	v |= DTM1_RG_VBUSVALID | DTM1_RG_AVALID;
-	wr32(phy, PHY_U2_DTM1, v);
-
 	v = rd32(phy, PHY_U2_DTM0);
 	v &= ~DTM0_FORCE_SUSPENDM;
 	wr32(phy, PHY_U2_DTM0, v);
-
-	/* Golden ACR5 SRCTRL=4 (0x40804000) */
-	wr32(phy, PHY_U2_ACR5, 0x40804000u);
-	delay(1000);
+	v = rd32(phy, PHY_U2_DTM0);
+	v &= ~DTM0_RG_SUSPENDM;
+	wr32(phy, PHY_U2_DTM0, v);
+	v = rd32(phy, PHY_U2_DTM0);
+	v &= ~DTM0_FORCE_UART_EN;
+	wr32(phy, PHY_U2_DTM0, v);
+	v = rd32(phy, PHY_U2_DTM1);
+	v &= ~DTM1_UART_EN;
+	wr32(phy, PHY_U2_DTM1, v);
+	v = rd32(phy, PHY_U2_ACR4);
+	v &= ~(ACR4_GPIO_CTL | ACR4_GPIO_MODE);
+	wr32(phy, PHY_U2_ACR4, v);
+	v = rd32(phy, PHY_U2_DTM0);
+	v &= ~DTM0_FORCE_SUSPENDM;
+	wr32(phy, PHY_U2_DTM0, v);
+	v = rd32(phy, PHY_U2_DTM0);
+	v &= ~(DTM0_RG_XCVRSEL_MSK | DTM0_RG_DATAIN_MSK | DTM0_PART_MASK);
+	wr32(phy, PHY_U2_DTM0, v);
+	v = rd32(phy, PHY_U2_ACR6);
+	v &= ~ACR6_BC11_SW_EN;
+	wr32(phy, PHY_U2_ACR6, v);
+	v = rd32(phy, PHY_U2_ACR6);
+	v |= ACR6_OTG_VBUSCMP_EN;
+	wr32(phy, PHY_U2_ACR6, v);
+	v = rd32(phy, PHY_U2_DTM1);
+	v |= DTM1_RG_VBUSVALID | DTM1_RG_AVALID;
+	v &= ~DTM1_RG_SESSEND;
+	wr32(phy, PHY_U2_DTM1, v);
 }
 
 static void
@@ -694,36 +628,36 @@ ps5169_enable(vm_offset_t gpio)
 static void
 ippc_init(vm_offset_t ippc)
 {
-	uint32_t v;
+	uint32_t c0 = rd32(ippc, IPPC_PW_CTRL0);
+	uint32_t c2 = rd32(ippc, IPPC_PW_CTRL2);
+	uint32_t u3 = rd32(ippc, IPPC_U3_CTRL_0P);
+	uint32_t u2 = rd32(ippc, IPPC_U2_CTRL_0P);
+	uint32_t rst = rd32(ippc, IPPC_DEV_RST_CTRL);
 
 	/* Global SSUSB SW reset */
-	v = rd32(ippc, IPPC_PW_CTRL0);
-	wr32(ippc, IPPC_PW_CTRL0, v | 1u);
+	wr32(ippc, IPPC_PW_CTRL0, c0 | 1u);
 	delay(200);
-	wr32(ippc, IPPC_PW_CTRL0, v & ~1u);
+	wr32(ippc, IPPC_PW_CTRL0, c0 & ~1u);
 	delay(200);
 
-	/* Enable Device IP power */
-	v = rd32(ippc, IPPC_PW_CTRL2) & ~1u;
-	wr32(ippc, IPPC_PW_CTRL2, v);
-
-	/* Release U3 port 0 & U2 port 0 power-down / disable, device mode */
-	v = rd32(ippc, IPPC_U3_CTRL_0P) & ~((1u << 1) | (1u << 0));
-	wr32(ippc, IPPC_U3_CTRL_0P, v);
-
-	v = rd32(ippc, IPPC_U2_CTRL_0P) & ~((1u << 2) | (1u << 1) | (1u << 0));
-	wr32(ippc, IPPC_U2_CTRL_0P, v);
+	/* Enable Device IP power; U3/U2 ports enabled in dual/OTG mode */
+	wr32(ippc, IPPC_PW_CTRL2, c2 & ~1u);
+	u3 = (u3 & ~((1u << 0) | (1u << 1) | U3_HOST_SEL)) | U3_DUAL_MODE;
+	u2 = (u2 & ~((1u << 0) | (1u << 1) | (1u << 2))) | U2_OTG_SEL;
+	wr32(ippc, IPPC_U3_CTRL_0P, u3);
+	wr32(ippc, IPPC_U2_CTRL_0P, u2);
 
 	/* Device SW reset */
-	wr32(ippc, IPPC_DEV_RST_CTRL, rd32(ippc, IPPC_DEV_RST_CTRL) | 1u);
+	wr32(ippc, IPPC_DEV_RST_CTRL, rst | 1u);
 	delay(200);
-	wr32(ippc, IPPC_DEV_RST_CTRL, rd32(ippc, IPPC_DEV_RST_CTRL) & ~1u);
+	wr32(ippc, IPPC_DEV_RST_CTRL, rst & ~1u);
 
-	/* Wait for IPPC clocks ready (SYSPLL + U2 MAC clock) */
-	for (int i = 0; i < 200; i++) {
+	/* Wait for IPPC clocks ready (SYSPLL + REF + SYS125 + U3_RST + U2_RST) */
+	uint32_t want = (1u << 0) | (1u << 8) | (1u << 10) | (1u << 16);
+	for (int i = 0; i < 2000; i++) {
 		uint32_t s1 = rd32(ippc, IPPC_PW_STS1);
 		uint32_t s2 = rd32(ippc, IPPC_PW_STS2);
-		if ((s1 & 0x01u) && (s2 & 0x01u)) {
+		if ((s1 & want) == want && (s2 & 0x01u)) {
 			break;
 		}
 		delay(100);
@@ -757,9 +691,11 @@ mac_soft_connect(vm_offset_t mac, vm_offset_t phy, int on)
 	uint32_t v;
 
 	if (on) {
-		v = rd32(phy, PHY_U2_ACR3) | ACR3_EN_PU_DP;
+		v = rd32(phy, PHY_U2_ACR3) | ACR3_PUPD_BIST_EN | ACR3_EN_PU_DP;
 		wr32(phy, PHY_U2_ACR3, v);
 		delay(1000);
+		v = rd32(mac, MISC_CTRL_OFF) | 0x3u;
+		wr32(mac, MISC_CTRL_OFF, v);
 		v = rd32(mac, MAC2_PM_CTRL_OFF) | (1u << 6) | (1u << 0);
 		wr32(mac, MAC2_PM_CTRL_OFF, v);
 		delay(2000);
@@ -783,6 +719,7 @@ gpd_chksum(const uint8_t *g)
 		}
 		sum += g[i];
 	}
+	sum += 1u;
 	return (uint8_t)(0xffu - (sum & 0xffu));
 }
 
@@ -1000,9 +937,8 @@ tx_ep_program_regs(vm_offset_t mac, uint64_t sar_pa)
 	wr32(mac, TX1CSR0_OFF, 512u | TX_DMAREQEN);
 	wr32(mac, TX1CSR1_OFF, TX_SLOT(2) | TX_TYPE(0));
 	wr32(mac, TX1CSR2_OFF, TX_FIFOADDR(0) | TX_FIFOSEGSIZE(9));
-	wr32(mac, QCR0_OFF, 1u);
-	wr32(mac, QCR1_OFF, rd32(mac, QCR1_OFF) & ~(1u << 1));   /* TX ZLP off (we pad +1B on 512-multiples) */
-	wr32(mac, QCR3_OFF, (rd32(mac, QCR3_OFF) & ~0x00000007u) | 0x00060000u); /* RX CS on, TX CS off */
+	wr32(mac, QCR0_OFF, rd32(mac, QCR0_OFF) | (1u << 1));    /* TX1 checksum enable */
+	wr32(mac, QCR1_OFF, rd32(mac, QCR1_OFF) & ~(1u << 1));   /* TX1 ZLP off (we pad +1B on 512-multiples) */
 	wr32(mac, TQERRIESR0_OFF, rd32(mac, TQERRIESR0_OFF) | QMU_TX1_CS_ERR | QMU_TX1_LEN_ERR);
 	wr32(mac, TQSAR1_OFF, (uint32_t)sar_pa);
 	wr32(mac, TQHIAR1_OFF, (uint32_t)((sar_pa >> 32) & 0xfu));
@@ -1286,8 +1222,8 @@ rx_ep_program_regs(vm_offset_t mac)
 	wr32(mac, RX1CSR0_OFF, 512u | RX_DMAREQEN);
 	wr32(mac, RX1CSR1_OFF, RX_SLOT(2) | RX_TYPE(0));
 	wr32(mac, RX1CSR2_OFF, RX_FIFOADDR(0) | RX_FIFOSEGSIZE(9));
-	wr32(mac, QCR0_OFF, 1u);
-	wr32(mac, QCR3_OFF, (rd32(mac, QCR3_OFF) & ~0x00000007u) | 0x00060000u);
+	wr32(mac, QCR0_OFF, rd32(mac, QCR0_OFF) | (1u << 17));   /* RX1 checksum enable */
+	wr32(mac, QCR3_OFF, (rd32(mac, QCR3_OFF) & ~(1u << 1)) | (1u << 17)); /* RX1 ZLP off, COZ on */
 	wr32(mac, RQERRIESR0_OFF, rd32(mac, RQERRIESR0_OFF) | QMU_RX1_LEN_ERR | QMU_RX1_CS_ERR);
 	wr32(mac, RQERRIESR1_OFF, rd32(mac, RQERRIESR1_OFF) | QMU_RX1_ZLP_ERR);
 	wr32(mac, RQSAR1_OFF, (uint32_t)u.rx_ring_pa);
@@ -1488,6 +1424,11 @@ ep0_write_fifo(vm_offset_t mac, const uint8_t *src, uint32_t len)
 		wr32(mac, FIFO0_OFF, w);
 		i += 4u;
 	}
+	if (i + 2u <= len) {
+		uint16_t w = (uint16_t)src[i] | ((uint16_t)src[i + 1] << 8);
+		wr16(mac, FIFO0_OFF, w);
+		i += 2u;
+	}
 	while (i < len) {
 		wr8(mac, FIFO0_OFF, src[i++]);
 	}
@@ -1513,58 +1454,45 @@ static void
 ep0_send(vm_offset_t mac, const uint8_t *src, uint32_t desc_len, uint32_t wlen)
 {
 	uint32_t total = desc_len < wlen ? desc_len : wlen;
+	if (wlen == 0) {
+		ep0_ack(mac);
+		return;
+	}
 	if (total > sizeof(u.ep0_tx_buf)) {
 		total = sizeof(u.ep0_tx_buf);
 	}
 	memcpy(u.ep0_tx_buf, src, total);
 
-	uint32_t chunk = total > 64u ? 64u : total;
-	int last = (chunk < 64u) || (chunk == total && total == wlen);
-
-	/* Clear SETUPPKTRDY first before loading TX FIFO */
+	/* Clear SETUPPKTRDY + assert DPHTX (data-phase TX) before loading FIFO0 */
 	uint32_t csr = rd32(mac, EP0CSR_OFF) & EP0_W1C_BITS;
-	wr32(mac, EP0CSR_OFF, csr | EP0_SETUPPKTRDY);
+	wr32(mac, EP0CSR_OFF, csr | EP0_SETUPPKTRDY | EP0_DPHTX);
 
-	ep0_write_fifo(mac, u.ep0_tx_buf, chunk);
+	uint32_t sent = 0;
+	while (sent < total) {
+		uint32_t chunk = total - sent;
+		if (chunk > 64u) {
+			chunk = 64u;
+		}
+		ep0_write_fifo(mac, u.ep0_tx_buf + sent, chunk);
+		csr = rd32(mac, EP0CSR_OFF) & EP0_W1C_BITS;
+		wr32(mac, EP0CSR_OFF, csr | EP0_TXPKTRDY);
+		for (uint32_t spin = 0; spin < 1000u; spin++) {
+			if (!(rd32(mac, EP0CSR_OFF) & EP0_TXPKTRDY)) {
+				break;
+			}
+			delay(10);
+		}
+		sent += chunk;
+	}
 
+	/* Wait briefly (~2 ms max) for FIFO drain, then always write DATAEND (0107 semantics) */
+	delay(100);
+	for (uint32_t spin = 0; spin < 20u && (rd32(mac, EP0CSR_OFF) & EP0_FIFOFULL); spin++) {
+		delay(100);
+	}
 	csr = rd32(mac, EP0CSR_OFF) & EP0_W1C_BITS;
-	csr |= EP0_TXPKTRDY;
-	if (last) {
-		csr |= EP0_DATAEND;
-		u.ep0_tx_pending = 0;
-	} else {
-		u.ep0_tx_total = total;
-		u.ep0_tx_sent = chunk;
-		u.ep0_tx_pending = 1;
-	}
-	wr32(mac, EP0CSR_OFF, csr);
-}
-
-static void
-ep0_tx_more(vm_offset_t mac)
-{
-	if (!u.ep0_tx_pending) {
-		return;
-	}
-	uint32_t csr = rd32(mac, EP0CSR_OFF);
-	if (csr & EP0_TXPKTRDY) {
-		return;
-	}
-	uint32_t rem = u.ep0_tx_total - u.ep0_tx_sent;
-	uint32_t chunk = rem > 64u ? 64u : rem;
-	int last = (chunk < 64u) || (u.ep0_tx_sent + chunk == u.ep0_tx_total);
-
-	if (chunk > 0) {
-		ep0_write_fifo(mac, u.ep0_tx_buf + u.ep0_tx_sent, chunk);
-	}
-	u.ep0_tx_sent += chunk;
-
-	csr = (csr & EP0_W1C_BITS) | EP0_TXPKTRDY;
-	if (last) {
-		csr |= EP0_DATAEND;
-		u.ep0_tx_pending = 0;
-	}
-	wr32(mac, EP0CSR_OFF, csr);
+	wr32(mac, EP0CSR_OFF, csr | EP0_DATAEND);
+	u.ep0_tx_pending = 0;
 }
 
 static const uint8_t *
@@ -1745,20 +1673,32 @@ ep0_service(vm_offset_t mac)
 	uint32_t episr = rd32(mac, EPISR_OFF);
 	if (episr & (EPISR_EP0ISR | EPISR_SETUPEND)) {
 		wr32(mac, EPISR_OFF, episr & (EPISR_EP0ISR | EPISR_SETUPEND));
-		if (episr & EPISR_SETUPEND) {
-			u.ep0_tx_pending = 0;
-		}
 	}
 
 	uint32_t csr = rd32(mac, EP0CSR_OFF);
+	if (!(csr & EP0_SETUPPKTRDY) && (csr & EP0_MAXPKTSZ_MSK) != 64u) {
+		uint32_t v = (csr & EP0_W1C_BITS & ~EP0_MAXPKTSZ_MSK) | 64u;
+		wr32(mac, EP0CSR_OFF, v);
+		csr = rd32(mac, EP0CSR_OFF);
+	}
 	if (csr & EP0_SENTSTALL) {
 		wr32(mac, EP0CSR_OFF, (csr & EP0_W1C_BITS) | EP0_SENTSTALL);
-		u.ep0_tx_pending = 0;
+		csr = rd32(mac, EP0CSR_OFF);
 	}
 	if (csr & EP0_SETUPPKTRDY) {
 		ep0_handle_setup(mac);
-	} else if (u.ep0_tx_pending && !(csr & EP0_TXPKTRDY)) {
-		ep0_tx_more(mac);
+	}
+
+	csr = rd32(mac, EP0CSR_OFF);
+	if (csr & EP0_RXPKTRDY) {
+		uint32_t count = rd32(mac, RXCOUNT0_OFF);
+		if (count > 512u) {
+			count = 512u;
+		}
+		for (uint32_t i = 0; i < count; i++) {
+			(void)rd8(mac, FIFO0_OFF);
+		}
+		wr32(mac, EP0CSR_OFF, (csr & EP0_W1C_BITS) | EP0_RXPKTRDY | EP0_DATAEND);
 	}
 }
 
@@ -1880,7 +1820,9 @@ mtk_usb_worker(__unused void *arg, __unused wait_result_t wr)
 		if (!u.cfg_seen && u.reattach_cnt < 6 &&
 		    t >= u.attach_ms + 12000ULL && t >= u.last_ev_ms + 2000ULL) {
 			u.reattach_cnt++;
-			printf("mtk_usb_ecm: no host config yet, reattach #%u\n", u.reattach_cnt);
+			printf("mtk_usb_ecm: no host config yet, reattach #%u (setups=%u rst=%u irq=%u ep0=0x%x otg=0x%x)\n",
+			    u.reattach_cnt, u.setups_seen, u.resets_seen, u.irq_count,
+			    rd32(u.mac, EP0CSR_OFF), rd32(u.ippc, IPPC_OTG_STS));
 			mac_soft_connect(u.mac, u.phy, 0);
 			usb_rearm(u.mac);
 			delay_for_interval(150, NSEC_PER_MSEC);
@@ -1896,7 +1838,7 @@ mtk_usb_worker(__unused void *arg, __unused wait_result_t wr)
 
 		/* Sleep up to 2 ms (or wake immediately on IRQ / TX enqueue) */
 		uint64_t deadline = 0;
-		clock_interval_to_deadline(2, NSEC_PER_MSEC, &deadline);
+		clock_interval_to_deadline(1, NSEC_PER_MSEC, &deadline);
 		assert_wait_deadline((event_t)&u.wake_chan, THREAD_UNINT, deadline);
 		thread_block(THREAD_CONTINUE_NULL);
 	}
@@ -2010,45 +1952,35 @@ hakios_mtk_usb_ecm_init(void)
 
 	u.txq_lock = lck_spin_alloc_init(&usb_lck_grp, LCK_ATTR_NULL);
 
-	/* 1. PHY + IPPC + PS5169 + MAC bring-up */
+	/* 1. IPPC -> U3/U2 PHY -> IDDIG -> PS5169 -> MAC2 (exact verified MT6877 order) */
+	ippc_init(u.ippc);
 	u3_phy_on(u.phy);
 	u2_phy_on(u.phy);
-	ippc_init(u.ippc);
+	delay(1000);
 
-	/* Force IDDIG=1 (device mode) and clear BIST/PU_DP */
+	/* Force IDDIG=1 (device mode) and drop pull-up briefly for clean re-enumeration */
 	wr32(u.phy, PHY_U2_DTM1, rd32(u.phy, PHY_U2_DTM1) | DTM1_FORCE_IDDIG | DTM1_RG_IDDIG);
 	wr32(u.phy, PHY_U2_ACR3, rd32(u.phy, PHY_U2_ACR3) & ~(ACR3_PUPD_BIST_EN | ACR3_EN_PU_DP));
 
 	ps5169_enable(u.gpio);
 
-	/* MAC2 HS device mode configuration */
+	/* MAC2 HS device mode configuration (0086 + 0091 + 0103) */
 	wr32(u.mac, LV1IECR_OFF, ~0u);
 	wr32(u.mac, USB3_CONFIG_OFF, rd32(u.mac, USB3_CONFIG_OFF) & ~1u);
 	wr32(u.mac, MAC2_PM_CTRL_OFF,
 	    (rd32(u.mac, MAC2_PM_CTRL_OFF) | (1u << 5)) & ~((1u << 6) | (1u << 0)));
 	wr32(u.mac, DEV_CONF_OFF, 0);
-	wr32(u.mac, MAC2_PM_CTRL_OFF, rd32(u.mac, MAC2_PM_CTRL_OFF) | (1u << 10));
-
-	/* MT6877 USB2 HS parity & LPM mask */
-	wr32(u.mac, 0x2414u, rd32(u.mac, 0x2414u) | 0x00000400u);
-	wr32(u.mac, 0x2444u, 0x0000a4f0u);
-	wr32(u.mac, 0x244cu, rd32(u.mac, 0x244cu) | 1u);
-	wr32(u.mac, 0x2418u, rd32(u.mac, 0x2418u) | 1u);
-	wr32(u.mac, 0x0828u, 0x0006000fu);
-	wr32(u.mac, 0x1410u, rd32(u.mac, 0x1410u) & ~(1u << 2));
-	wr32(u.mac, 0x0c0cu, rd32(u.mac, 0x0c0cu) & ~(1u << 21)); /* BUS_PERFORMANCE noise quirk */
 	wr32(u.ippc, IPPC_U2_CTRL_0P, rd32(u.ippc, IPPC_U2_CTRL_0P) & ~U2_OTG_SEL);
 
 	/* Clean detach window so host drops any bootloader USB state */
 	ep0_quiet_reset(u.mac);
 	delay(150000);
 
-	/* Arm EP0 & enable MTU3 interrupts */
+	/* Arm EP0 & enable MTU3 interrupts before soft-connect */
 	uint32_t csr = (rd32(u.mac, EP0CSR_OFF) & EP0_W1C_BITS & ~EP0_MAXPKTSZ_MSK) | 64u;
 	wr32(u.mac, EP0CSR_OFF, csr);
-	wr32(u.mac, MISC_CTRL_OFF, rd32(u.mac, MISC_CTRL_OFF) | 0x3u);
 	wr32(u.mac, MAC2_INTR_STS_OFF, rd32(u.mac, MAC2_INTR_STS_OFF));
-	wr32(u.mac, MAC2_INTR_EN_OFF, MAC2_INTR_RESET | MAC2_INTR_RESUME | MAC2_INTR_SUSPEND);
+	wr32(u.mac, MAC2_INTR_EN_OFF, rd32(u.mac, MAC2_INTR_EN_OFF) | MAC2_INTR_RESET | MAC2_INTR_RESUME | MAC2_INTR_SUSPEND);
 	wr32(u.mac, EPIESR_OFF, EPISR_EP0ISR | EPISR_SETUPEND);
 	wr32(u.mac, LV1IESR_OFF, LV1_BMU_INTR | LV1_QMU_INTR | LV1_MAC2_INTR | LV1_EP0_INTR);
 
