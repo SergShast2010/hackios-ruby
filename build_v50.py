@@ -13,8 +13,8 @@ from v41_artifacts import PACK_BASE, ROOT
 DEFAULT_KERNEL = Path('/home/sergsh/hackios/hakios-xnu-kernel/hakios-kernel')
 DEFAULT_RAMDISK = Path('/home/sergsh/hackios/hakios-xnu-kernel/userland/hello')
 MKPAYLOAD = Path('/home/sergsh/hackios/hakios-xnu-kernel/xnuloader/mkpayload.py')
-V50_OUT = ROOT / 'out' / 'v54'
-V50_IMAGE = 'Mu-ruby-v0.54-hakios-ram2g.img'
+V50_OUT = ROOT / 'out' / 'v54b'
+V50_IMAGE = 'Mu-ruby-v0.54b-hakios-ram2g.img'
 
 
 def sha256_bytes(b: bytes) -> str:
