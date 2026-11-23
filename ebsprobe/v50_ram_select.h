@@ -17,7 +17,10 @@
 #define V50_XNU_MIN_WIN     0x10000000ULL /* 256 MiB */
 #define V50_XNU_MAX_WIN     0x180000000ULL /* 6 GiB: matches XNU bootstrap page tables */
 #ifndef V50_RUBY_ALLOW_HIGH_RAM
-#define V50_RUBY_ALLOW_HIGH_RAM 0 /* v0.53: use >4 GiB DRAM with physical SError-safe probe + <4 GiB fallback */
+#define V50_RUBY_ALLOW_HIGH_RAM 1 /* v0.54: enable >4 GiB DRAM window (0x140000000) with <4 GiB fallback */
+#endif
+#ifndef V50_RUBY_HIGH_CAP
+#define V50_RUBY_HIGH_CAP 0x80000000ULL /* 2 GiB (0x140000000..0x1C0000000): proven on ruby */
 #endif
 #define V50_MAX_RANGES      256u
 #define V50_MAX_CPUS        8u
@@ -293,6 +296,7 @@ static uint32_t V50FindRubyRamWindow(const unsigned char *f, uint64_t cap, struc
 #endif
         if (e <= s) continue;
         uint64_t sz = e - s;
+        if (s >= 0x100000000ULL && sz > V50_RUBY_HIGH_CAP) sz = V50_RUBY_HIGH_CAP;
         if (sz > V50_XNU_MAX_WIN) sz = V50_XNU_MAX_WIN;
         if (sz >= V50_XNU_MIN_WIN && sz > best_size) {
             best_base = s;

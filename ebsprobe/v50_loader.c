@@ -721,7 +721,7 @@ __attribute__((noinline, noreturn)) void V50BootPhysical(struct v50_ctx *ctx) {
     if (ctx->is_qemu) {
         append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "virtio_input=1 keylog=1 touchlog=1 hello_wait=6");
     } else {
-        append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "buttons=2 keylog=1 touchscreen=2 touchlog=1 mtk_ufs_ro=1 mtk_ram_diag=1 hello_wait=25");
+        append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "buttons=2 keylog=1 mtk_ufs_ro=1 mtk_ram_diag=1 hello_wait=10");
     }
 
     uint64_t entry_pa = ctx->entry_va + slide;
@@ -766,11 +766,11 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
     int real_panic = valid_log && sfind_n(log, log_len, "panic(") && !sfind_n(log, log_len, "INPUT SUMMARY:") && !sfind_n(log, log_len, "mtk_ram_diag:");
 
     if (hello_ok && !real_panic) {
-        ui_line(ctx, 0, "RUBY v0.53d: XNU SMP+INPUT+UFS PASS!", COL_GREEN);
+        ui_line(ctx, 0, "RUBY v0.54: XNU 2GB+SMP+UFS PASS!", COL_GREEN);
     } else if (real_panic) {
-        ui_line(ctx, 0, "RUBY v0.53d: XNU PANIC (SEE LOG)", COL_RED);
+        ui_line(ctx, 0, "RUBY v0.54: XNU PANIC (SEE LOG)", COL_RED);
     } else {
-        ui_line(ctx, 0, "RUBY v0.53d: XNU RETURNED (SEE LOG)", COL_YELLOW);
+        ui_line(ctx, 0, "RUBY v0.54: XNU RETURNED (SEE LOG)", COL_YELLOW);
     }
     ui_hex(ctx, 1, "RAMbase: ", ctx->xnu_phys_base, COL_WHITE);
     ui_hex(ctx, 2, "RAMsize: ", ctx->xnu_mem_size, ctx->ram_probe_fail_pa ? COL_YELLOW : COL_GREEN);
@@ -788,7 +788,7 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
         append_str(st, &n, sizeof(st), "BTN:");
         append_str(st, &n, sizeof(st), btn_ok ? "OK " : "NO ");
         append_str(st, &n, sizeof(st), "TCH:");
-        append_str(st, &n, sizeof(st), touch_ok ? "OK " : "NO ");
+        append_str(st, &n, sizeof(st), touch_ok ? "OK " : "-- ");
         append_str(st, &n, sizeof(st), "UFS:");
         append_str(st, &n, sizeof(st), ctx->is_qemu ? "-- " : (ufs_ok ? "OK " : "NO "));
         append_str(st, &n, sizeof(st), "P1:");
@@ -817,7 +817,7 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
                     if (ll == 0) continue;
                     int match = 0;
                     if (pass == 0) {
-                        match = sfind_n(log + ls, ll, "mtk_ram_diag:");
+                        match = sfind_n(log + ls, ll, "mtk_ram_diag:") || sfind_n(log + ls, ll, "ruby_isr:");
                     } else {
                         if (sfind_n(log + ls, ll, "mtk_touch:")) {
                             match = 1;
@@ -972,7 +972,7 @@ __attribute__((noinline, noreturn)) void V50OnException(
     ctx->physical = 1;
     g_con = NULL;
     fb_clear(ctx);
-    ui_line(ctx, 0, "RUBY v0.53: EARLY LOADER EXCEPTION", COL_RED);
+    ui_line(ctx, 0, "RUBY v0.54: EARLY LOADER EXCEPTION", COL_RED);
     ui_hex(ctx, 2, "Vector: ", vec, COL_YELLOW);
     ui_hex(ctx, 3, "ESR:    ", esr, COL_RED);
     ui_hex(ctx, 4, "ELR:    ", elr, COL_WHITE);
@@ -1005,7 +1005,7 @@ static int find_qemu_window(efi_boot_services *bs, uint64_t *out_base, uint64_t 
             uint64_t ha = a > 0x100000000ULL ? a : 0x100000000ULL;
             if (e > ha && e - ha >= 0x40000000ULL) {
                 uint64_t hsz = e - ha;
-                if (hsz > V50_XNU_MAX_WIN) hsz = V50_XNU_MAX_WIN;
+                if (hsz > V50_RUBY_HIGH_CAP) hsz = V50_RUBY_HIGH_CAP;
                 if (hsz > high_size) {
                     high_base = ha;
                     high_size = hsz;
@@ -1137,7 +1137,7 @@ efi_status EFIAPI efi_main(efi_handle image, efi_system_table *st) {
         ctx.fb_pitch = (uint64_t)ctx.fb_stride_px * 4ULL;
     }
     fb_clear(&ctx);
-    ui_line(&ctx, 0, "ruby v0.53d - HakiOS SMP + Input + RO-UFS + RAMdiag", COL_GREEN);
+    ui_line(&ctx, 0, "ruby v0.54 - HakiOS 2 GiB RAM + 8C SMP + RO-UFS", COL_GREEN);
 
     uint64_t el = 0;
     __asm__ volatile("mrs %0, CurrentEL" : "=r"(el));

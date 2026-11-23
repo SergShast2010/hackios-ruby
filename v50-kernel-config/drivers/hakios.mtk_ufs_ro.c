@@ -324,17 +324,20 @@ ramdiag_open(__unused dev_t dev, __unused int flags, __unused int type, __unused
 	}
 	ramdiag_ran = 1;
 
+	extern unsigned long gPhysBase, gPhysSize;
 	static const uint64_t addrs[] = {
 		0x100000000ULL,
 		0x13D000000ULL,
 		0x140000000ULL,
 		0x180000000ULL,
 		0x1C0000000ULL,
+		0x1E0000000ULL,
 		0x1FE000000ULL,
 		0x200000000ULL,
 		0x220000000ULL,
 		0x23D000000ULL,
 	};
+	unsigned tested = 0;
 
 	uint64_t saved_daif = 0, pre_isr = 0, tcr = 0;
 	__asm__ volatile("mrs %0, daif" : "=r"(saved_daif));
@@ -344,6 +347,10 @@ ramdiag_open(__unused dev_t dev, __unused int flags, __unused int type, __unused
 
 	for (unsigned i = 0; i < sizeof(addrs) / sizeof(addrs[0]); i++) {
 		uint64_t pa = addrs[i];
+		if (pa >= (uint64_t)gPhysBase && pa < (uint64_t)gPhysBase + (uint64_t)gPhysSize) {
+			continue; /* inside live XNU RAM */
+		}
+		tested++;
 		vm_offset_t va = ml_io_map_unmappable((vm_offset_t)pa, 0x4000, VM_WIMG_COPYBACK);
 		if (!va) {
 			printf("mtk_ram_diag: map fail pa=0x%llx\n", (unsigned long long)pa);
@@ -376,8 +383,8 @@ ramdiag_open(__unused dev_t dev, __unused int flags, __unused int type, __unused
 		}
 	}
 
-	printf("mtk_ram_diag: ALL 9 HIGH-PA WBACK CLEAN (0x100000000..0x23D000000 pre=0x%llx tcr=0x%llx)\n",
-	    (unsigned long long)pre_isr, (unsigned long long)tcr);
+	printf("mtk_ram_diag: ALL %u HIGH-PA WBACK CLEAN (pre=0x%llx tcr=0x%llx)\n",
+	    tested, (unsigned long long)pre_isr, (unsigned long long)tcr);
 	__asm__ volatile("msr daif, %0\n\tisb" :: "r"(saved_daif) : "memory");
 	return 0;
 }

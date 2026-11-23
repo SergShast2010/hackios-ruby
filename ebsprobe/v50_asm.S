@@ -44,9 +44,8 @@ V50EnterPhysical:
     isb
     dsb  sy
 
-    mrs  x9, id_aa64mmfr2_el1
-    ubfx x9, x9, #20, #4            /* CCIDX */
-    cbnz x9, .Lv50_cache_done
+    mrs  x6, id_aa64mmfr2_el1
+    ubfx x6, x6, #20, #4            /* CCIDX (0 or 1) */
 
     mrs  x10, clidr_el1
     ubfx x11, x10, #24, #3          /* LoC */
@@ -65,11 +64,17 @@ V50EnterPhysical:
     mrs  x14, ccsidr_el1
     and  x15, x14, #7
     add  x15, x15, #4               /* log2(line bytes) */
-    ubfx x16, x14, #3, #10          /* max way */
-    clz  w17, w16
-    ubfx x8, x14, #13, #15          /* max set */
+    cbnz x6, .Lv50_ccidx1
+    ubfx x5, x14, #3, #10           /* CCIDX=0: max way */
+    ubfx x8, x14, #13, #15          /* CCIDX=0: max set */
+    b    .Lv50_ccidx_ok
+.Lv50_ccidx1:
+    ubfx x5, x14, #3, #21           /* CCIDX=1: max way */
+    ubfx x8, x14, #32, #24          /* CCIDX=1: max set */
+.Lv50_ccidx_ok:
+    clz  w17, w5
 .Lv50_set:
-    ubfx x16, x14, #3, #10
+    mov  x16, x5
 .Lv50_way:
     lsl  x9, x16, x17
     lsl  x7, x8, x15
