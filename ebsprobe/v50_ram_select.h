@@ -20,7 +20,7 @@
 #define V50_RUBY_ALLOW_HIGH_RAM 1 /* v0.54: enable >4 GiB DRAM window (0x140000000) with <4 GiB fallback */
 #endif
 #ifndef V50_RUBY_HIGH_CAP
-#define V50_RUBY_HIGH_CAP 0x80000000ULL /* 2 GiB (0x140000000..0x1C0000000): proven on ruby */
+#define V50_RUBY_HIGH_CAP 0x100000000ULL /* up to 4 GiB (0x140000000..0x23E000000 = 4064 MiB on ruby) */
 #endif
 #define V50_MAX_RANGES      256u
 #define V50_MAX_CPUS        8u
