@@ -721,7 +721,7 @@ __attribute__((noinline, noreturn)) void V50BootPhysical(struct v50_ctx *ctx) {
     if (ctx->is_qemu) {
         append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "virtio_input=1 keylog=1 touchlog=1 hello_wait=0");
     } else {
-        append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "buttons=2 keylog=1 mtk_ufs_ro=1 hello_wait=0");
+        append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "buttons=2 mtk_ufs_ro=1 mtk_usb_ecm=1 hello_wait=0 usb_hold=120");
     }
 
     uint64_t entry_pa = ctx->entry_va + slide;
@@ -763,14 +763,16 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
     int btn_ok   = valid_log && (sfind_n(log, log_len, "mtk_buttons: ready") || sfind_n(log, log_len, "virtio-input:"));
     int touch_ok = valid_log && (sfind_n(log, log_len, "mtk_touch: detected") || sfind_n(log, log_len, "virtio-input: tablet"));
     int ufs_ok   = valid_log && sfind_n(log, log_len, "mtk_ufs_ro: LUN2 GPT OK");
+    int usb_rdy  = valid_log && sfind_n(log, log_len, "mtk_usb_ecm: ready");
+    int usb_up   = valid_log && sfind_n(log, log_len, "mtk_usb_ecm: ECM data alt=1");
     int real_panic = valid_log && sfind_n(log, log_len, "panic(") && !sfind_n(log, log_len, "PID 1 DONE") && !sfind_n(log, log_len, "INPUT SUMMARY:");
 
     if (hello_ok && !real_panic) {
-        ui_line(ctx, 0, "RUBY v0.54e: XNU 4GB+SMP+UFS PASS!", COL_GREEN);
+        ui_line(ctx, 0, "RUBY v0.55a: XNU 4GB+SMP+UFS+USB PASS!", COL_GREEN);
     } else if (real_panic) {
-        ui_line(ctx, 0, "RUBY v0.54e: XNU PANIC (SEE LOG)", COL_RED);
+        ui_line(ctx, 0, "RUBY v0.55a: XNU PANIC (SEE LOG)", COL_RED);
     } else {
-        ui_line(ctx, 0, "RUBY v0.54e: XNU RETURNED (SEE LOG)", COL_YELLOW);
+        ui_line(ctx, 0, "RUBY v0.55a: XNU RETURNED (SEE LOG)", COL_YELLOW);
     }
     ui_hex(ctx, 1, "RAMbase: ", ctx->xnu_phys_base, COL_WHITE);
     ui_hex(ctx, 2, "RAMsize: ", ctx->xnu_mem_size, ctx->ram_probe_fail_pa ? COL_YELLOW : COL_GREEN);
@@ -787,10 +789,11 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
         append_str(st, &n, sizeof(st), (ctx->cpu_count <= 1u) ? "1C " : (smp_ok ? "OK " : "NO "));
         append_str(st, &n, sizeof(st), "BTN:");
         append_str(st, &n, sizeof(st), btn_ok ? "OK " : "NO ");
-        append_str(st, &n, sizeof(st), "TCH:");
-        append_str(st, &n, sizeof(st), touch_ok ? "OK " : "-- ");
+        (void)touch_ok;
         append_str(st, &n, sizeof(st), "UFS:");
         append_str(st, &n, sizeof(st), ctx->is_qemu ? "-- " : (ufs_ok ? "OK " : "NO "));
+        append_str(st, &n, sizeof(st), "USB:");
+        append_str(st, &n, sizeof(st), ctx->is_qemu ? "-- " : (usb_up ? "UP " : (usb_rdy ? "ON " : "NO ")));
         append_str(st, &n, sizeof(st), "P1:");
         append_str(st, &n, sizeof(st), hello_ok ? "OK" : "NO");
         ui_line(ctx, 4, st, (gic_ok && bsd_ok && smp_ok && hello_ok) ? COL_GREEN : COL_YELLOW);
@@ -828,6 +831,9 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
                                    (sfind_n(log + ls, ll, "ver=") ||
                                     sfind_n(log + ls, ll, "LUN2") ||
                                     sfind_n(log + ls, ll, "userdata"))) {
+                            match = 1;
+                        } else if (sfind_n(log + ls, ll, "mtk_usb_ecm:") ||
+                                   sfind_n(log + ls, ll, "net: en0")) {
                             match = 1;
                         }
                     }
@@ -972,7 +978,7 @@ __attribute__((noinline, noreturn)) void V50OnException(
     ctx->physical = 1;
     g_con = NULL;
     fb_clear(ctx);
-    ui_line(ctx, 0, "RUBY v0.54e: EARLY LOADER EXCEPTION", COL_RED);
+    ui_line(ctx, 0, "RUBY v0.55a: EARLY LOADER EXCEPTION", COL_RED);
     ui_hex(ctx, 2, "Vector: ", vec, COL_YELLOW);
     ui_hex(ctx, 3, "ESR:    ", esr, COL_RED);
     ui_hex(ctx, 4, "ELR:    ", elr, COL_WHITE);
@@ -1137,7 +1143,7 @@ efi_status EFIAPI efi_main(efi_handle image, efi_system_table *st) {
         ctx.fb_pitch = (uint64_t)ctx.fb_stride_px * 4ULL;
     }
     fb_clear(&ctx);
-    ui_line(&ctx, 0, "ruby v0.54e - HakiOS 4 GiB RAM + 8C SMP + RO-UFS", COL_GREEN);
+    ui_line(&ctx, 0, "ruby v0.55a - HakiOS 4 GiB + 8C + UFS + USB ECM", COL_GREEN);
 
     uint64_t el = 0;
     __asm__ volatile("mrs %0, CurrentEL" : "=r"(el));
