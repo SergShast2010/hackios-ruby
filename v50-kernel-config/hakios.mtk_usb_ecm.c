@@ -158,7 +158,7 @@ extern void gic_v3_spi_detach(uint32_t intid);
 #define EPISR_EP0ISR        (1u << 0)
 #define EPISR_SETUPEND      (1u << 16)
 
-#define EP_RST_OFF          0x00c0u
+#define EP_RST_OFF          0x0804u
 #define EP_RST_EP0_BIT      (1u << 0)
 #define EP_RST_RX1_BIT      (1u << 1)
 #define EP_RST_TX1_BIT      (1u << 17)
@@ -184,8 +184,11 @@ extern void gic_v3_spi_detach(uint32_t intid);
 #define TX3CSR1_OFF         0x0134u
 #define TX3CSR2_OFF         0x0138u
 #define TX_TXPKTRDY         (1u << 16)
-#define TX_SENDSTALL        (1u << 20)
+#define TX_FLUSHFIFO        (1u << 20)
+#define TX_SENDSTALL        (1u << 21)
 #define TX_SENTSTALL        (1u << 22)
+#define TX_FIFOEMPTY        (1u << 24)
+#define TX_FIFOFULL         (1u << 25)
 #define TX_DMAREQEN         (1u << 29)
 #define TX_SLOT(n)          (((uint32_t)(n) & 0x3fu) << 8)
 #define TX_TYPE(n)          (((uint32_t)(n) & 0x3u) << 4)
@@ -196,7 +199,8 @@ extern void gic_v3_spi_detach(uint32_t intid);
 #define RX1CSR1_OFF         0x0214u
 #define RX1CSR2_OFF         0x0218u
 #define RX_RXPKTRDY         (1u << 16)
-#define RX_SENDSTALL        (1u << 20)
+#define RX_FLUSHFIFO        (1u << 20)
+#define RX_SENDSTALL        (1u << 21)
 #define RX_SENTSTALL        (1u << 22)
 #define RX_DMAREQEN         (1u << 29)
 #define RX_SLOT(n)          (((uint32_t)(n) & 0x3fu) << 8)
@@ -783,15 +787,9 @@ mac_soft_connect(vm_offset_t mac, vm_offset_t phy, int on)
 static uint8_t
 gpd_chksum(const uint8_t *g)
 {
-	uint32_t sum = 0;
-	for (uint32_t i = 0; i < 16u; i++) {
-		if (i == 1u) {
-			continue;
-		}
-		sum += g[i];
-	}
-	sum += 1u;
-	return (uint8_t)(0xffu - (sum & 0xffu));
+	/* 0248: MT6877 vendor mtu3 leaves GPD chksum byte 0 with QCR0=1 (CS validation off). */
+	(void)g;
+	return 0;
 }
 
 static inline void
@@ -883,8 +881,12 @@ ecm_tx_enqueue_mbuf(mbuf_t packet, size_t length)
 	hdr[1] = (uint8_t)((wire >> 8) & 0xffu);
 	ecm_txq_put_bytes(hdr, 2u);
 	ecm_txq_put_bytes(frame, wire);
-	u.tx_frames++;
+	uint32_t txf = ++u.tx_frames;
 	lck_spin_unlock(u.txq_lock);
+	if (txf <= 4 && length >= 14) {
+		printf("mtk_usb_ecm: TX frame #%u len=%u type=0x%02x%02x\n",
+		    txf, (unsigned)length, frame[12], frame[13]);
+	}
 
 	usb_wake_worker();
 	return true;
@@ -1008,8 +1010,11 @@ tx_ep_program_regs(vm_offset_t mac, uint64_t sar_pa)
 	wr32(mac, TX1CSR0_OFF, 512u | TX_DMAREQEN);
 	wr32(mac, TX1CSR1_OFF, TX_SLOT(2) | TX_TYPE(0));
 	wr32(mac, TX1CSR2_OFF, TX_FIFOADDR(0) | TX_FIFOSEGSIZE(9));
-	wr32(mac, QCR0_OFF, rd32(mac, QCR0_OFF) | (1u << 1));    /* TX1 checksum enable */
-	wr32(mac, QCR1_OFF, rd32(mac, QCR1_OFF) & ~(1u << 1));   /* TX1 ZLP off (we pad +1B on 512-multiples) */
+	/* 0249/0329a3: CS validation off (QCR0=1u), QIESR0 before Q_START, vendor QCR1 TX-ZLP mask */
+	wr32(mac, QCR0_OFF, 1u);
+	wr32(mac, QIESR0_OFF, QMU_TX1_DONE | QMU_RX1_DONE);
+	wr32(mac, QIESR1_OFF, QMU_QIER1_MASK);
+	wr32(mac, QCR1_OFF, rd32(mac, QCR1_OFF) | 0x0006000eu);
 	wr32(mac, TQERRIESR0_OFF, rd32(mac, TQERRIESR0_OFF) | QMU_TX1_CS_ERR | QMU_TX1_LEN_ERR);
 	wr32(mac, TQSAR1_OFF, (uint32_t)sar_pa);
 	wr32(mac, TQHIAR1_OFF, (uint32_t)((sar_pa >> 32) & 0xfu));
@@ -1081,6 +1086,10 @@ tx_drain(vm_offset_t mac)
 		u.tx_inflight--;
 		freed++;
 	}
+	if (u.tx_inflight == 0) {
+		/* 0300: QMU parks on the empty sentinel; next enqueue must issue Q_START */
+		u.tx_started = 0;
+	}
 	if (freed) {
 		u.tx_progress_ms = now_ms();
 	}
@@ -1101,7 +1110,7 @@ tx_push(vm_offset_t mac)
 		uint32_t enq = u.tx_enq;
 		uint32_t next_idx = (enq + 1u) % TX_RING_N;
 		uint8_t *buf = u.tx_buf[enq];
-		uint32_t n = ecm_tx_dequeue_chunk(buf, ECM_MPS);
+		uint32_t n = ecm_tx_dequeue_chunk(buf, TX_BUF_STRIDE);
 		if (n == 0) {
 			break;
 		}
@@ -1114,14 +1123,13 @@ tx_push(vm_offset_t mac)
 		gpd_zero_aligned(g_next);
 		uint32_t ext = ((uint32_t)((bpa >> 32) & 0xfu) | (((uint32_t)((npa >> 32) & 0xfu)) << 4));
 		volatile uint32_t *gw = (volatile uint32_t *)(void *)g;
-		gw[0] = (1u << 7) | (ext << 16);    /* IOC=1, chksum=0, ext_addr in byte 2 */
 		gw[1] = (uint32_t)npa;
 		gw[2] = (uint32_t)bpa;
 		gw[3] = n;                          /* length, ZLP=0 */
 
 		dc_civac(buf, (n + 63u) & ~63u);
 		dma_mb();
-		*(volatile uint8_t *)g = (1u << 0) | (1u << 7);  /* publish HWO | IOC */
+		gw[0] = (1u << 0) | (1u << 7) | (ext << 16); /* atomic HWO | IOC | chksum=0 | ext_addr */
 		dma_mb();
 
 		u.tx_enq = next_idx;
@@ -1278,12 +1286,11 @@ rx_arm_slot(uint32_t i)
 	memcpy(&w1, local + 4, 4);
 	memcpy(&w2, local + 8, 4);
 	memcpy(&w3, local + 12, 4);
-	gw[0] = w0;
 	gw[1] = w1;
 	gw[2] = w2;
 	gw[3] = w3;
 	dma_mb();
-	*(volatile uint8_t *)(u.rx_gpd_cpu + i * GPD_SIZE) = (1u << 0) | (1u << 7); /* HWO | IOC */
+	gw[0] = w0 | 1u;                                /* atomic HWO | IOC | allow_buf_len */
 	dma_mb();
 }
 
@@ -1293,8 +1300,8 @@ rx_ep_program_regs(vm_offset_t mac)
 	wr32(mac, RX1CSR0_OFF, 512u | RX_DMAREQEN);
 	wr32(mac, RX1CSR1_OFF, RX_SLOT(2) | RX_TYPE(0));
 	wr32(mac, RX1CSR2_OFF, RX_FIFOADDR(0) | RX_FIFOSEGSIZE(9));
-	wr32(mac, QCR0_OFF, rd32(mac, QCR0_OFF) | (1u << 17));   /* RX1 checksum enable */
-	wr32(mac, QCR3_OFF, (rd32(mac, QCR3_OFF) & ~(1u << 1)) | (1u << 17)); /* RX1 ZLP off, COZ on */
+	wr32(mac, QCR0_OFF, 1u);                                 /* 0249/0329a4: CS validation off */
+	wr32(mac, QCR3_OFF, (rd32(mac, QCR3_OFF) & ~0x00000007u) | 0x00060000u); /* 0329a4: RX ZLP off, COZ on */
 	wr32(mac, RQERRIESR0_OFF, rd32(mac, RQERRIESR0_OFF) | QMU_RX1_LEN_ERR | QMU_RX1_CS_ERR);
 	wr32(mac, RQERRIESR1_OFF, rd32(mac, RQERRIESR1_OFF) | QMU_RX1_ZLP_ERR);
 	wr32(mac, RQSAR1_OFF, (uint32_t)u.rx_ring_pa);
@@ -1351,11 +1358,12 @@ static uint32_t
 rx_cur_slot(vm_offset_t mac)
 {
 	uint32_t cpr = rd32(mac, RQCPR1_OFF);
-	uint32_t base = (uint32_t)u.rx_ring_pa;
-	if (cpr < base || cpr >= base + RX_RING_N * GPD_SIZE) {
+	uint32_t hiar = rd32(mac, RQHIAR1_OFF);
+	uint64_t cur_pa = ((uint64_t)((hiar >> 8) & 0xfu) << 32) | cpr;
+	if (cur_pa < u.rx_ring_pa || cur_pa >= u.rx_ring_pa + (uint64_t)RX_RING_N * GPD_SIZE) {
 		return 0xffu;
 	}
-	return (cpr - base) / GPD_SIZE;
+	return (uint32_t)((cur_pa - u.rx_ring_pa) / GPD_SIZE);
 }
 
 static void
@@ -1795,6 +1803,7 @@ ep0_handle_setup(vm_offset_t mac)
 				if (!u.tx_ready || !u.rx_ready) {
 					configure_data_endpoints(mac);
 				}
+				wr32(mac, LV1IESR_OFF, LV1_BMU_INTR | LV1_QMU_INTR | LV1_MAC2_INTR);
 				u.notify_step = 1;
 				hakios_net_link_state(true);
 			} else {
@@ -1989,9 +1998,10 @@ mtk_usb_worker(__unused void *arg, __unused wait_result_t wr)
 
 		usb_service_once();
 
-		/* If never configured after 12s (and 2s quiet), detach/reattach once so late cables work */
+		/* Late-cable recovery ONLY when host has never enumerated us (setups_seen == 0).
+		 * Once enumerated (setups_seen > 0), keep D+ steady even at cfg=0 so Windows/usbipd can bind! */
 		uint64_t t = now_ms();
-		if (!u.cfg_seen && u.reattach_cnt < 6 &&
+		if (u.setups_seen == 0 && u.reattach_cnt < 6 &&
 		    t >= u.attach_ms + 12000ULL && t >= u.last_ev_ms + 2000ULL) {
 			u.reattach_cnt++;
 			printf("mtk_usb_ecm: reattach #%u (setups=%u rst=%u addr=%u cfg=%u txp=%u de=%u fblk=%u rw=%u ep0=0x%x last=%02x/%02x/%04x/%u)\n",
@@ -2089,11 +2099,11 @@ hakios_mtk_usb_ecm_log_stats(void)
 	if (!u.initialized) {
 		return;
 	}
-	printf("mtk_usb_ecm: stats setups=%u rst=%u addr=%u cfg=%u alt=%u txp=%u de=%u fblk=%u rw=%u ep0=0x%x last=%02x/%02x/%04x/%u\n",
+	printf("mtk_usb_ecm: stats setups=%u rst=%u addr=%u cfg=%u alt=%u rx=%u(%up/%ue) tx=%u(%us) tq=0x%x rq=0x%x\n",
 	    u.setups_seen, u.resets_seen, u.dev_addr, u.config, u.ecm_alt,
-	    u.ep0_txpkts, u.ep0_dataends, u.ep0_fifo_blocked, u.ep0_rewinds,
-	    u.mac ? rd32(u.mac, EP0CSR_OFF) : 0u,
-	    u.last_req_type, u.last_req, u.last_val, u.last_wlen);
+	    u.rx_frames, u.rx_packets, u.rx_errors, u.tx_frames, u.tx_salvages,
+	    u.mac ? rd32(u.mac, TQCSR1_OFF) : 0u,
+	    u.mac ? rd32(u.mac, RQCSR1_OFF) : 0u);
 }
 
 void
