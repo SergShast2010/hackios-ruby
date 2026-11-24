@@ -32,6 +32,8 @@
 #include <sys/kpi_socket.h>
 #include <sys/param.h>
 #include <sys/sockio.h>
+#include <os/atomic_private.h>
+#include <sys/sysctl.h>
 #include <sys/systm.h>
 
 extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
@@ -284,11 +286,11 @@ extern void gic_v3_spi_detach(uint32_t intid);
 
 #define ECM_MPS             512u
 #define ECM_FRAME_MAX       1536u
-#define ECM_TXQ_BYTES       (64u * 1024u)
+#define ECM_TXQ_BYTES       (256u * 1024u)
 
 #define TX_RING_N           64u
 #define TX_BUF_STRIDE       2048u
-#define RX_RING_N           16u
+#define RX_RING_N           64u
 #define RX_BUF_STRIDE       2048u
 #define GPD_SIZE            16u
 
@@ -496,7 +498,10 @@ static struct {
 	uint64_t    tx_progress_ms;
 	uint64_t    tx_salvage_ms;
 	uint32_t    tx_salvages;
+	uint32_t    tx_softbell;
+	uint32_t    tx_softnoop;
 	uint32_t    tx_frames;
+	uint64_t    tx_bytes;
 	uint32_t    tx_drops;
 
 	/* QMU RX EP1 (0x01) */
@@ -513,6 +518,7 @@ static struct {
 	uint32_t    rx_packets;
 	uint32_t    rx_errors;
 	uint32_t    rx_frames;
+	uint64_t    rx_bytes;
 	uint32_t    rx_drops;
 
 	/* ECM software TX queue: [u16 len][bytes...] */
@@ -527,14 +533,16 @@ static struct {
 	uint32_t    rx_flen;
 	int         rx_fbad;
 
-	/* Worker wakeup channel */
+	/* Worker wakeup channel (lock-free wake_pending prevents lost wakeups before thread_block) */
 	int         wake_chan;
+	uint32_t    wake_pending;
 	uint32_t    irq_count;
 } u;
 
 static void
 usb_wake_worker(void)
 {
+	os_atomic_store(&u.wake_pending, 1u, release);
 	thread_wakeup((event_t)&u.wake_chan);
 }
 
@@ -882,6 +890,7 @@ ecm_tx_enqueue_mbuf(mbuf_t packet, size_t length)
 	ecm_txq_put_bytes(hdr, 2u);
 	ecm_txq_put_bytes(frame, wire);
 	uint32_t txf = ++u.tx_frames;
+	u.tx_bytes += (uint64_t)length;
 	lck_spin_unlock(u.txq_lock);
 	if (txf <= 4 && length >= 14) {
 		printf("mtk_usb_ecm: TX frame #%u len=%u type=0x%02x%02x\n",
@@ -940,6 +949,7 @@ ecm_rx_chunk(const uint8_t *data, uint32_t len)
 	}
 
 	u.rx_frames++;
+	u.rx_bytes += (uint64_t)flen;
 	if (u.rx_frames <= 4) {
 		printf("mtk_usb_ecm: RX frame #%u len=%u ethertype=0x%02x%02x\n",
 		    u.rx_frames, flen, u.rx_frame[12], u.rx_frame[13]);
@@ -1086,11 +1096,20 @@ tx_drain(vm_offset_t mac)
 		u.tx_inflight--;
 		freed++;
 	}
+	if (freed) {
+		u.tx_progress_ms = now_ms();
+		u.tx_softnoop = 0;
+	}
 	if (u.tx_inflight == 0) {
 		/* 0300: QMU parks on the empty sentinel; next enqueue must issue Q_START */
 		u.tx_started = 0;
-	}
-	if (freed) {
+	} else if (!(rd32(mac, TQCSR1_OFF) & QMU_Q_ACTIVE)) {
+		/* QMU parked while frames remain in ring: immediately kick from deq without waiting 500ms */
+		uint64_t kpa = u.tx_gpd_pa[u.tx_deq];
+		wr32(mac, TQSAR1_OFF, (uint32_t)kpa);
+		wr32(mac, TQHIAR1_OFF, (uint32_t)((kpa >> 32) & 0xfu));
+		wr32(mac, TQCSR1_OFF, QMU_Q_START);
+		u.tx_started = 1;
 		u.tx_progress_ms = now_ms();
 	}
 }
@@ -1145,7 +1164,7 @@ tx_push(vm_offset_t mac)
 	}
 
 	uint32_t tq = rd32(mac, TQCSR1_OFF);
-	if (!u.tx_started || !(tq & QMU_Q_ACTIVE)) {
+	if (!(tq & QMU_Q_ACTIVE)) {
 		uint64_t kpa = u.tx_gpd_pa[u.tx_deq];
 		wr32(mac, TQSAR1_OFF, (uint32_t)kpa);
 		wr32(mac, TQHIAR1_OFF, (uint32_t)((kpa >> 32) & 0xfu));
@@ -1153,6 +1172,7 @@ tx_push(vm_offset_t mac)
 		u.tx_started = 1;
 	} else {
 		wr32(mac, TQCSR1_OFF, QMU_Q_RESUME);
+		u.tx_started = 1;
 	}
 }
 
@@ -1163,12 +1183,13 @@ tx_watchdog(vm_offset_t mac)
 		return;
 	}
 	uint64_t t = now_ms();
-	if (t < u.tx_progress_ms + 500ULL) {
+	if (t < u.tx_progress_ms + 200ULL) {
 		return;
 	}
 
 	/* First try a soft doorbell kick if QMU went idle with pending GPDs */
 	uint32_t tq = rd32(mac, TQCSR1_OFF);
+	uint32_t tx0 = rd32(mac, TX1CSR0_OFF);
 	if (!(tq & QMU_Q_ACTIVE)) {
 		uint64_t kpa = u.tx_gpd_pa[u.tx_deq];
 		wr32(mac, TQSAR1_OFF, (uint32_t)kpa);
@@ -1176,6 +1197,20 @@ tx_watchdog(vm_offset_t mac)
 		wr32(mac, TQCSR1_OFF, QMU_Q_START);
 		u.tx_started = 1;
 		u.tx_progress_ms = t;
+		return;
+	}
+
+	/* 0339/0346: pseudo-ACTIVE stall (FIFOFULL while claiming ACTIVE): soft Q_START up to 3x */
+	if ((tx0 & TX_FIFOFULL) && u.tx_softnoop < 3u) {
+		u.tx_softnoop++;
+		u.tx_softbell++;
+		wr32(mac, TQCSR1_OFF, QMU_Q_START);
+		u.tx_started = 1;
+		u.tx_progress_ms = t;
+		return;
+	}
+
+	if (t < u.tx_progress_ms + 500ULL) {
 		return;
 	}
 
@@ -1996,6 +2031,7 @@ mtk_usb_worker(__unused void *arg, __unused wait_result_t wr)
 			continue;
 		}
 
+		os_atomic_store(&u.wake_pending, 0u, release);
 		usb_service_once();
 
 		/* Late-cable recovery ONLY when host has never enumerated us (setups_seen == 0).
@@ -2032,6 +2068,10 @@ mtk_usb_worker(__unused void *arg, __unused wait_result_t wr)
 			clock_interval_to_deadline(1, NSEC_PER_MSEC, &deadline);
 		}
 		assert_wait_deadline((event_t)&u.wake_chan, THREAD_UNINT, deadline);
+		if (!defer_dataend && (os_atomic_load(&u.wake_pending, acquire) != 0u || ecm_txq_pending())) {
+			clear_wait(current_thread(), THREAD_AWAKENED);
+			continue;
+		}
 		thread_block(THREAD_CONTINUE_NULL);
 	}
 }
@@ -2093,15 +2133,43 @@ configure_en0_ipv4(void)
 
 /* ---- Entry points ------------------------------------------------------------------------------ */
 
+SYSCTL_DECL(_kern_hakios);
+
+static int
+mtk_usb_ecm_sysctl_stats(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
+{
+	char buf[256];
+	if (!u.initialized) {
+		snprintf(buf, sizeof(buf), "mtk_usb_ecm: disabled (not initialized)\n");
+	} else {
+		snprintf(buf, sizeof(buf),
+		    "init=1 setups=%u rst=%u addr=%u cfg=%u alt=%u irq=%u\n"
+		    "rx: frames=%u bytes=%llu pkts=%u err=%u drop=%u rq=0x%x\n"
+		    "tx: frames=%u bytes=%llu drop=%u inf=%u salv=%u sbell=%u tq=0x%x tx0=0x%x\n",
+		    u.setups_seen, u.resets_seen, u.dev_addr, u.config, u.ecm_alt, u.irq_count,
+		    u.rx_frames, (unsigned long long)u.rx_bytes, u.rx_packets, u.rx_errors, u.rx_drops,
+		    u.mac ? rd32(u.mac, RQCSR1_OFF) : 0u,
+		    u.tx_frames, (unsigned long long)u.tx_bytes, u.tx_drops, u.tx_inflight,
+		    u.tx_salvages, u.tx_softbell,
+		    u.mac ? rd32(u.mac, TQCSR1_OFF) : 0u,
+		    u.mac ? rd32(u.mac, TX1CSR0_OFF) : 0u);
+	}
+	return SYSCTL_OUT(req, buf, strlen(buf) + 1);
+}
+
+SYSCTL_PROC(_kern_hakios, OID_AUTO, usb_stats, CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_LOCKED, NULL, 0,
+    mtk_usb_ecm_sysctl_stats, "A", "MT6877 USB MTU3 + QMU + CDC-ECM live counters");
+
 void
 hakios_mtk_usb_ecm_log_stats(void)
 {
 	if (!u.initialized) {
 		return;
 	}
-	printf("mtk_usb_ecm: stats setups=%u rst=%u addr=%u cfg=%u alt=%u rx=%u(%up/%ue) tx=%u(%us) tq=0x%x rq=0x%x\n",
+	printf("mtk_usb_ecm: stats setups=%u rst=%u addr=%u cfg=%u alt=%u rx=%u(%lluB/%ue) tx=%u(%lluB/%ud/%us/%ub) tq=0x%x rq=0x%x\n",
 	    u.setups_seen, u.resets_seen, u.dev_addr, u.config, u.ecm_alt,
-	    u.rx_frames, u.rx_packets, u.rx_errors, u.tx_frames, u.tx_salvages,
+	    u.rx_frames, (unsigned long long)u.rx_bytes, u.rx_errors,
+	    u.tx_frames, (unsigned long long)u.tx_bytes, u.tx_drops, u.tx_salvages, u.tx_softbell,
 	    u.mac ? rd32(u.mac, TQCSR1_OFF) : 0u,
 	    u.mac ? rd32(u.mac, RQCSR1_OFF) : 0u);
 }

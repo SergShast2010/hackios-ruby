@@ -13,8 +13,8 @@ from v41_artifacts import PACK_BASE, ROOT
 DEFAULT_KERNEL = Path('/home/sergsh/hackios/hakios-xnu-kernel/hakios-kernel')
 DEFAULT_RAMDISK = Path('/home/sergsh/hackios/hakios-xnu-kernel/userland/hello')
 MKPAYLOAD = Path('/home/sergsh/hackios/hakios-xnu-kernel/xnuloader/mkpayload.py')
-V50_OUT = ROOT / 'out' / 'v55b'
-V50_IMAGE = 'Mu-ruby-v0.55e-hakios-usb-ecm.img'
+V50_OUT = ROOT / 'out' / 'v55f'
+V50_IMAGE = 'Mu-ruby-v0.55f-hakios-usb-ecm.img'
 
 
 def sha256_bytes(b: bytes) -> str:
@@ -64,14 +64,14 @@ def build(out: Path, kernel: Path, ramdisk: Path, cmdline: str, kver: str, pack_
         image_bytes, report, _chunks = package_image.build(
             pack_base.read_bytes(), efi_bytes, payload=payload_bytes
         )
-        image_name = 'Mu-ruby-v0.55e-apple-splash.img' if apple_splash else V50_IMAGE
+        image_name = 'Mu-ruby-v0.55f-apple-splash.img' if apple_splash else V50_IMAGE
         img = out / image_name
         img.write_bytes(image_bytes)
         (out / 'v50_loader.efi').write_bytes(efi_bytes)
         (out / 'PAYLOAD.XNP').write_bytes(payload_bytes)
 
         manifest = {
-            'version': 'v0.55e',
+            'version': 'v0.55f',
             'image': image_name,
             'apple_splash': apple_splash,
             'image_bytes': len(image_bytes),
@@ -105,7 +105,7 @@ if __name__ == '__main__':
     ap.add_argument('--kernel', type=Path, default=DEFAULT_KERNEL)
     ap.add_argument('--ramdisk', type=Path, default=DEFAULT_RAMDISK)
     ap.add_argument('--cmdline', default='')
-    ap.add_argument('--kernel-version', default='ruby-v0.55e-mt6877')
+    ap.add_argument('--kernel-version', default='ruby-v0.55f-mt6877')
     ap.add_argument('--pack-base', type=Path, default=PACK_BASE)
     ap.add_argument('--apple-splash', action='store_true', help='Boot with Apple splash logo instead of verbose console')
     a = ap.parse_args()

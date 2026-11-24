@@ -22,6 +22,7 @@
 #include <miscfs/devfs/devfs.h>
 #include <sys/conf.h>
 #include <sys/systm.h>
+#include <sys/sysctl.h>
 #include <vm/vm_kern.h>
 #include <vm/pmap.h>
 
@@ -85,6 +86,29 @@ static uint8_t ufs_data1[16384] __attribute__((aligned(16384)));
 
 static vm_offset_t ufs_mmio;
 static uint8_t ufs_tag;
+
+SYSCTL_DECL(_kern_hakios);
+static char ufs_parts_buf[4096] = "mtk_ufs_ro: not probed\n";
+static size_t ufs_parts_len;
+
+SYSCTL_STRING(_kern_hakios, OID_AUTO, ufs_parts, CTLFLAG_RD | CTLFLAG_LOCKED, ufs_parts_buf, 0,
+    "read-only snapshot of LUN2 GPT partitions probed at boot");
+
+static void
+ufs_parts_append(const char *fmt, ...)
+{
+	va_list ap;
+	if (ufs_parts_len + 2 >= sizeof(ufs_parts_buf)) {
+		return;
+	}
+	va_start(ap, fmt);
+	int w = vsnprintf(ufs_parts_buf + ufs_parts_len, sizeof(ufs_parts_buf) - ufs_parts_len, fmt, ap);
+	va_end(ap);
+	if (w > 0) {
+		size_t avail = sizeof(ufs_parts_buf) - 1 - ufs_parts_len;
+		ufs_parts_len += ((size_t)w < avail) ? (size_t)w : avail;
+	}
+}
 
 static inline uint32_t
 ufs_rd(uint32_t off)
@@ -278,6 +302,9 @@ ufs_parse_gpt(uint32_t lun, uint32_t blk_sz)
 	uint32_t lba_unit = (hdr_off == 512u) ? 512u : blk_sz;
 
 	printf("mtk_ufs_ro: LUN%u GPT OK (hdr@%u ent@%u nent=%u)\n", lun, hdr_off, ent_off, nent);
+	ufs_parts_len = 0;
+	ufs_parts_buf[0] = '\0';
+	ufs_parts_append("LUN%u GPT (READ-ONLY, hdr@%u ent@%u nent=%u blk=%u)\n", lun, hdr_off, ent_off, nent, blk_sz);
 	for (uint32_t i = 0; i < scan; i++) {
 		uint8_t e[128];
 		ufs_copy_bytes(e, ent_off + i * esz, 128u);
@@ -295,6 +322,11 @@ ufs_parse_gpt(uint32_t lun, uint32_t blk_sz)
 			name[c] = (ch >= 32 && ch < 127) ? (char)ch : '?';
 		}
 		name[c] = 0;
+		{
+			uint64_t pmib = ((last - first + 1ULL) * lba_unit) >> 20;
+			ufs_parts_append("%2u: %-18s lba=0x%08llx size=%llu MiB\n",
+			    valid, name, (unsigned long long)first, (unsigned long long)pmib);
+		}
 		if (strcmp(name, "boot_a") == 0 || strcmp(name, "boot_b") == 0 ||
 		    strcmp(name, "super") == 0 || strcmp(name, "userdata") == 0 ||
 		    strcmp(name, "vbmeta_a") == 0 || strcmp(name, "metadata") == 0) {
