@@ -840,11 +840,11 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
     int real_panic = valid_log && sfind_n(log, log_len, "panic(") && !sfind_n(log, log_len, "PID 1 DONE") && !sfind_n(log, log_len, "INPUT SUMMARY:");
 
     if (hello_ok && !real_panic) {
-        ui_line(ctx, 0, "RUBY v0.55c: XNU 4GB+SMP+UFS+USB PASS!", COL_GREEN);
+        ui_line(ctx, 0, "RUBY v0.55d: XNU 4GB+SMP+UFS+USB PASS!", COL_GREEN);
     } else if (real_panic) {
-        ui_line(ctx, 0, "RUBY v0.55c: XNU PANIC (SEE LOG)", COL_RED);
+        ui_line(ctx, 0, "RUBY v0.55d: XNU PANIC (SEE LOG)", COL_RED);
     } else {
-        ui_line(ctx, 0, "RUBY v0.55c: XNU RETURNED (SEE LOG)", COL_YELLOW);
+        ui_line(ctx, 0, "RUBY v0.55d: XNU RETURNED (SEE LOG)", COL_YELLOW);
     }
     ui_hex(ctx, 1, "RAMbase: ", ctx->xnu_phys_base, COL_WHITE);
     ui_hex(ctx, 2, "RAMsize: ", ctx->xnu_mem_size, ctx->ram_probe_fail_pa ? COL_YELLOW : COL_GREEN);
@@ -892,7 +892,12 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
                     if (ll == 0) continue;
                     int match = 0;
                     if (pass == 0) {
-                        match = sfind_n(log + ls, ll, "mtk_ram_diag:") || sfind_n(log + ls, ll, "ruby_isr:");
+                        match = sfind_n(log + ls, ll, "mtk_ram_diag:") ||
+                                sfind_n(log + ls, ll, "ruby_isr:") ||
+                                sfind_n(log + ls, ll, "mtk_usb_ecm: stats") ||
+                                sfind_n(log + ls, ll, "mtk_usb_ecm: SET_CONFIGURATION") ||
+                                sfind_n(log + ls, ll, "mtk_usb_ecm: ECM data") ||
+                                sfind_n(log + ls, ll, "mtk_usb_ecm: reattach #1");
                     } else {
                         if (sfind_n(log + ls, ll, "mtk_touch:")) {
                             match = 1;
@@ -904,7 +909,8 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
                                     sfind_n(log + ls, ll, "LUN2") ||
                                     sfind_n(log + ls, ll, "userdata"))) {
                             match = 1;
-                        } else if (sfind_n(log + ls, ll, "mtk_usb_ecm:") ||
+                        } else if (sfind_n(log + ls, ll, "mtk_usb_ecm: ready") ||
+                                   sfind_n(log + ls, ll, "mtk_usb_ecm: en0") ||
                                    sfind_n(log + ls, ll, "net: en0")) {
                             match = 1;
                         }
@@ -1050,7 +1056,7 @@ __attribute__((noinline, noreturn)) void V50OnException(
     ctx->physical = 1;
     g_con = NULL;
     fb_clear(ctx);
-    ui_line(ctx, 0, "RUBY v0.55c: EARLY LOADER EXCEPTION", COL_RED);
+    ui_line(ctx, 0, "RUBY v0.55d: EARLY LOADER EXCEPTION", COL_RED);
     ui_hex(ctx, 2, "Vector: ", vec, COL_YELLOW);
     ui_hex(ctx, 3, "ESR:    ", esr, COL_RED);
     ui_hex(ctx, 4, "ELR:    ", elr, COL_WHITE);
@@ -1219,7 +1225,7 @@ efi_status EFIAPI efi_main(efi_handle image, efi_system_table *st) {
 #else
     fb_clear(&ctx);
 #endif
-    ui_line(&ctx, 0, "ruby v0.55c - HakiOS 4 GiB + 8C + UFS + USB ECM", COL_GREEN);
+    ui_line(&ctx, 0, "ruby v0.55d - HakiOS 4 GiB + 8C + UFS + USB ECM", COL_GREEN);
 
     uint64_t el = 0;
     __asm__ volatile("mrs %0, CurrentEL" : "=r"(el));

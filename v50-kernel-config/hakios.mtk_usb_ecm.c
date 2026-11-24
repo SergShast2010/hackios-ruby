@@ -363,8 +363,8 @@ static const uint8_t ecm_phone_mac[ETHER_ADDR_LEN] = {
 static const uint8_t usb_dev_desc[18] = {
 	18, 0x01, 0x00, 0x02,               /* bLength, DEVICE, bcdUSB 2.00 */
 	0x02, 0x00, 0x00, 64,               /* bDeviceClass=CDC (0x02), MPS0=64 */
-	0x09, 0x12, 0x02, 0x00,             /* VID 0x1209, PID 0x0002 */
-	0x12, 0x02,                         /* bcdDevice 2.12 */
+	0x09, 0x12, 0x03, 0x00,             /* VID 0x1209, PID 0x0003 (0337 CDC-ECM) */
+	0x11, 0x02,                         /* bcdDevice 2.11 */
 	1, 2, 3, 1                          /* iMfg, iProd, iSerial, bNumConfigs */
 };
 
@@ -377,7 +377,7 @@ static const uint8_t usb_dev_qual_desc[10] = {
 /* 9 (cfg) + 9 (if0) + 5 (hdr) + 5 (union) + 13 (eth) + 7 (ep83) + 9 (if1 alt0) + 9 (if1 alt1) + 7 (ep01) + 7 (ep81) = 80 */
 static const uint8_t usb_cfg_desc_hs[80] = {
 	/* Configuration Descriptor */
-	9, 0x02, 80, 0x00, 2, 1, 0, 0xC0, 250,
+	9, 0x02, 80, 0x00, 2, 1, 0, 0x80, 250,
 	/* Interface 0: CDC Communication (ECM) */
 	9, 0x04, 0, 0, 1, 0x02, 0x06, 0x00, 0,
 	/* CDC Header Functional Descriptor */
@@ -399,7 +399,7 @@ static const uint8_t usb_cfg_desc_hs[80] = {
 };
 
 static const uint8_t usb_cfg_desc_fs[80] = {
-	9, 0x07, 80, 0x00, 2, 1, 0, 0xC0, 250,
+	9, 0x07, 80, 0x00, 2, 1, 0, 0x80, 250,
 	9, 0x04, 0, 0, 1, 0x02, 0x06, 0x00, 0,
 	5, 0x24, 0x00, 0x10, 0x01,
 	5, 0x24, 0x06, 0, 1,
@@ -460,6 +460,10 @@ static struct {
 	uint32_t    ep0_tx_sent;
 	uint32_t    ep0_tx_need_zlp;
 	int         ep0_tx_pending;
+	uint32_t    ep0_txpkts;
+	uint32_t    ep0_dataends;
+	uint32_t    ep0_fifo_blocked;
+	uint32_t    ep0_rewinds;
 	uint32_t    rst_armed;
 	uint32_t    rst_seen;
 	uint32_t    last_req_type;
@@ -1481,11 +1485,42 @@ configure_data_endpoints(vm_offset_t mac)
 
 /* ---- EP0 control state machine ----------------------------------------------------------------- */
 
+/*
+ * 0087/0147/0329a6: U3D_FIFO0 is a 32-bit port; write 32-bit words,
+ * then 16-bit and final 8-bit tail (never byte-by-byte across 64 bytes).
+ */
 static void
 ep0_write_fifo(vm_offset_t mac, const uint8_t *src, uint32_t len)
 {
-	for (uint32_t i = 0; i < len; i++) {
+	uint32_t i = 0;
+	while (i + 4u <= len) {
+		uint32_t w = (uint32_t)src[i] |
+		    ((uint32_t)src[i + 1] << 8) |
+		    ((uint32_t)src[i + 2] << 16) |
+		    ((uint32_t)src[i + 3] << 24);
+		wr32(mac, FIFO0_OFF, w);
+		i += 4u;
+	}
+	if (i + 2u <= len) {
+		uint16_t w = (uint16_t)src[i] | ((uint16_t)src[i + 1] << 8);
+		wr16(mac, FIFO0_OFF, w);
+		i += 2u;
+	}
+	if (i < len) {
 		wr8(mac, FIFO0_OFF, src[i]);
+	}
+}
+
+static void
+ep0_drain_fifo(vm_offset_t mac, uint32_t len)
+{
+	uint32_t i = 0;
+	while (i + 4u <= len) {
+		(void)rd32(mac, FIFO0_OFF);
+		i += 4u;
+	}
+	if (i < len) {
+		(void)rd32(mac, FIFO0_OFF);
 	}
 }
 
@@ -1498,22 +1533,29 @@ ep0_ack(vm_offset_t mac)
 }
 
 static void
-ep0_stall(vm_offset_t mac)
+ep0_stall(vm_offset_t mac, uint32_t wlen)
 {
 	uint32_t csr = rd32(mac, EP0CSR_OFF) & EP0_W1C_BITS;
-	csr |= EP0_SENDSTALL | EP0_SETUPPKTRDY;
+	csr |= EP0_SENDSTALL;
+	if (wlen == 0) {
+		csr |= EP0_SETUPPKTRDY;
+	}
 	wr32(mac, EP0CSR_OFF, csr);
 }
 
 /*
- * 0113c + 0113d (verified on ruby):
- * - strict=1 (inline inside ep0_send): feed remaining 64B packets for
- *   multi-packet descriptors (e.g. 80B config desc), NEVER write DATAEND!
- * - strict=0 (deferred to next worker tick): once TXPKTRDY clears and all
- *   bytes are sent, assert EP0_DATAEND (or ZLP first if needed).
- * Writing DATAEND inline causes the host to answer GET_DESCRIPTOR with a
- * port reset in an endless reconnect loop.
+ * Exact 0113c + 0113d + 0329a6 EP0 TX state machine (verified on ruby):
+ * - strict=1 (inline inside ep0_send for multi-packet >64B): wait up to
+ *   15 x 10 us for TXPKTRDY clear, then check EP0_FIFOFULL clear before
+ *   loading the next 64B packet. If FIFOFULL is still set, STOP and let
+ *   the next service tick load the packet (never overwrite a full FIFO).
+ *   NEVER write DATAEND when strict=1.
+ * - strict=0 (service tick): TXPKTRDY clear alone is enough (on MT6877
+ *   MTU3 EP0_FIFOFULL stays set after the last packet until DATAEND).
  */
+#define EP0_INLINE_SPINS   15u
+#define EP0_INLINE_SPIN_US 10u
+
 static int
 ep0_tx_step(vm_offset_t mac, int strict)
 {
@@ -1522,15 +1564,25 @@ ep0_tx_step(vm_offset_t mac, int strict)
 	if (!u.ep0_tx_pending) {
 		return 0;
 	}
-	csr = rd32(mac, EP0CSR_OFF);
-	if (csr & (EP0_SETUPPKTRDY | EP0_SENTSTALL)) {
-		u.ep0_tx_pending = 0;
-		return 0;
-	}
-	if (csr & EP0_TXPKTRDY) {
-		return 0;
+	for (uint32_t i = 0;; i++) {
+		csr = rd32(mac, EP0CSR_OFF);
+		if (csr & (EP0_SETUPPKTRDY | EP0_SENTSTALL)) {
+			u.ep0_tx_pending = 0;
+			return 0;
+		}
+		if (!(csr & EP0_TXPKTRDY)) {
+			break;
+		}
+		if (!strict || i >= EP0_INLINE_SPINS) {
+			return 0;
+		}
+		delay(EP0_INLINE_SPIN_US);
 	}
 	if (u.ep0_tx_sent < u.ep0_tx_total) {
+		if (strict && (csr & EP0_FIFOFULL)) {
+			u.ep0_fifo_blocked++;
+			return 0;
+		}
 		uint32_t n = u.ep0_tx_total - u.ep0_tx_sent;
 		if (n > 64u) {
 			n = 64u;
@@ -1539,20 +1591,28 @@ ep0_tx_step(vm_offset_t mac, int strict)
 		csr = rd32(mac, EP0CSR_OFF) & EP0_W1C_BITS;
 		wr32(mac, EP0CSR_OFF, csr | EP0_TXPKTRDY);
 		u.ep0_tx_sent += n;
+		u.ep0_txpkts++;
 		return 1;
 	}
 	if (u.ep0_tx_need_zlp) {
+		if (strict && (csr & EP0_FIFOFULL)) {
+			u.ep0_fifo_blocked++;
+			return 0;
+		}
 		u.ep0_tx_need_zlp = 0;
 		csr = rd32(mac, EP0CSR_OFF) & EP0_W1C_BITS;
 		wr32(mac, EP0CSR_OFF, csr | EP0_TXPKTRDY);
+		u.ep0_txpkts++;
 		return 1;
 	}
+	/* Last packet is out; leave DATAEND to the service tick (0113d). */
 	if (strict) {
 		return 0;
 	}
 	csr = rd32(mac, EP0CSR_OFF) & EP0_W1C_BITS;
 	wr32(mac, EP0CSR_OFF, csr | EP0_DATAEND);
 	u.ep0_tx_pending = 0;
+	u.ep0_dataends++;
 	return 1;
 }
 
@@ -1576,24 +1636,24 @@ ep0_send(vm_offset_t mac, const uint8_t *src, uint32_t desc_len, uint32_t wlen)
 	uint32_t csr = rd32(mac, EP0CSR_OFF) & EP0_W1C_BITS;
 	wr32(mac, EP0CSR_OFF, csr | EP0_SETUPPKTRDY | EP0_DPHTX);
 
-	uint32_t chunk = (total > 64u) ? 64u : total;
-	if (chunk > 0) {
-		ep0_write_fifo(mac, u.ep0_tx_buf, chunk);
+	if (total == 0) {
+		u.ep0_tx_pending = 0;
+		wr32(mac, EP0CSR_OFF, csr | EP0_DATAEND);
+		u.ep0_dataends++;
+		return;
 	}
+
+	uint32_t chunk = (total > 64u) ? 64u : total;
+	ep0_write_fifo(mac, u.ep0_tx_buf, chunk);
 	csr = rd32(mac, EP0CSR_OFF) & EP0_W1C_BITS;
 	wr32(mac, EP0CSR_OFF, csr | EP0_TXPKTRDY);
 	u.ep0_tx_sent = chunk;
 	u.ep0_tx_pending = 1;
+	u.ep0_txpkts++;
 
-	/* For multi-packet responses (>64B), spin up to 2 ms to feed remaining packets;
-	 * DATAEND itself is ALWAYS deferred to the next tick (0113d). */
-	if (u.ep0_tx_sent < u.ep0_tx_total || u.ep0_tx_need_zlp) {
-		for (uint32_t spin = 0; spin < 200u && u.ep0_tx_pending; spin++) {
-			(void)ep0_tx_step(mac, 1);
-			if (u.ep0_tx_sent >= u.ep0_tx_total && !u.ep0_tx_need_zlp) {
-				break;
-			}
-			delay(10);
+	/* Only pump inline when another packet follows; DATAEND stays deferred (0113d). */
+	if (total > chunk || u.ep0_tx_need_zlp) {
+		while (ep0_tx_step(mac, 1)) {
 		}
 	}
 }
@@ -1639,9 +1699,7 @@ ep0_handle_setup(vm_offset_t mac)
 		return;
 	}
 	if (count > 8u) {
-		for (uint32_t i = 0; i < count; i++) {
-			(void)rd8(mac, FIFO0_OFF);
-		}
+		ep0_drain_fifo(mac, count);
 		return;
 	}
 
@@ -1666,14 +1724,14 @@ ep0_handle_setup(vm_offset_t mac)
 		if ((type & 0x80u) == 0 && wlen == 0) {
 			ep0_ack(mac);
 		} else {
-			ep0_stall(mac);
+			ep0_stall(mac, wlen);
 		}
 		return;
 	}
 
 	/* Standard requests */
 	if ((type & 0x60u) != 0) {
-		ep0_stall(mac);
+		ep0_stall(mac, wlen);
 		return;
 	}
 
@@ -1682,7 +1740,7 @@ ep0_handle_setup(vm_offset_t mac)
 		uint32_t dlen = 0;
 		const uint8_t *desc = lookup_descriptor(val, &dlen);
 		if (!desc) {
-			ep0_stall(mac);
+			ep0_stall(mac, wlen);
 		} else if (wlen == 0) {
 			ep0_ack(mac);
 		} else {
@@ -1692,7 +1750,7 @@ ep0_handle_setup(vm_offset_t mac)
 	}
 	case 5: {                                   /* SET_ADDRESS */
 		if (wlen != 0) {
-			ep0_stall(mac);
+			ep0_stall(mac, wlen);
 			return;
 		}
 		uint32_t dc = rd32(mac, DEV_CONF_OFF) & ~0x7f000000u;
@@ -1757,7 +1815,7 @@ ep0_handle_setup(vm_offset_t mac)
 			}
 			ep0_ack(mac);
 		} else {
-			ep0_stall(mac);
+			ep0_stall(mac, wlen);
 		}
 		return;
 	}
@@ -1765,11 +1823,11 @@ ep0_handle_setup(vm_offset_t mac)
 		if (wlen == 0) {
 			ep0_ack(mac);
 		} else {
-			ep0_stall(mac);
+			ep0_stall(mac, wlen);
 		}
 		return;
 	default:
-		ep0_stall(mac);
+		ep0_stall(mac, wlen);
 		return;
 	}
 }
@@ -1778,8 +1836,15 @@ static void
 ep0_service(vm_offset_t mac)
 {
 	uint32_t episr = rd32(mac, EPISR_OFF);
-	if (episr & (EPISR_EP0ISR | EPISR_SETUPEND)) {
-		wr32(mac, EPISR_OFF, episr & (EPISR_EP0ISR | EPISR_SETUPEND));
+	if (episr & EPISR_SETUPEND) {
+		u.ep0_tx_pending = 0;
+		u.ep0_tx_sent = 0;
+		u.ep0_tx_total = 0;
+		u.ep0_tx_need_zlp = 0;
+		u.ep0_rewinds++;
+	}
+	if (episr) {
+		wr32(mac, EPISR_OFF, episr);
 	}
 
 	uint32_t csr = rd32(mac, EP0CSR_OFF);
@@ -1793,8 +1858,14 @@ ep0_service(vm_offset_t mac)
 		csr = rd32(mac, EP0CSR_OFF);
 	}
 	if (csr & EP0_SETUPPKTRDY) {
+		u.ep0_tx_pending = 0;
+		u.ep0_tx_sent = 0;
+		u.ep0_tx_total = 0;
+		u.ep0_tx_need_zlp = 0;
 		ep0_handle_setup(mac);
-	} else if (u.ep0_tx_pending) {
+		return;
+	}
+	if (u.ep0_tx_pending) {
 		(void)ep0_tx_step(mac, 0);
 	}
 
@@ -1804,9 +1875,7 @@ ep0_service(vm_offset_t mac)
 		if (count > 512u) {
 			count = 512u;
 		}
-		for (uint32_t i = 0; i < count; i++) {
-			(void)rd8(mac, FIFO0_OFF);
-		}
+		ep0_drain_fifo(mac, count);
 		wr32(mac, EP0CSR_OFF, (csr & EP0_W1C_BITS) | EP0_RXPKTRDY | EP0_DATAEND);
 	}
 }
@@ -1925,10 +1994,10 @@ mtk_usb_worker(__unused void *arg, __unused wait_result_t wr)
 		if (!u.cfg_seen && u.reattach_cnt < 6 &&
 		    t >= u.attach_ms + 12000ULL && t >= u.last_ev_ms + 2000ULL) {
 			u.reattach_cnt++;
-			printf("mtk_usb_ecm: reattach #%u (setups=%u rst=%u addr=%u irq=%u ep0=0x%x otg=0x%x last=%02x/%02x/%04x)\n",
-			    u.reattach_cnt, u.setups_seen, u.resets_seen, u.dev_addr, u.irq_count,
-			    rd32(u.mac, EP0CSR_OFF), rd32(u.ippc, IPPC_OTG_STS),
-			    u.last_req_type, u.last_req, u.last_val);
+			printf("mtk_usb_ecm: reattach #%u (setups=%u rst=%u addr=%u cfg=%u txp=%u de=%u fblk=%u rw=%u ep0=0x%x last=%02x/%02x/%04x/%u)\n",
+			    u.reattach_cnt, u.setups_seen, u.resets_seen, u.dev_addr, u.config,
+			    u.ep0_txpkts, u.ep0_dataends, u.ep0_fifo_blocked, u.ep0_rewinds,
+			    rd32(u.mac, EP0CSR_OFF), u.last_req_type, u.last_req, u.last_val, u.last_wlen);
 			mac_soft_connect(u.mac, u.phy, 0);
 			usb_rearm(u.mac);
 			delay_for_interval(500, NSEC_PER_MSEC);
@@ -1937,14 +2006,17 @@ mtk_usb_worker(__unused void *arg, __unused wait_result_t wr)
 			u.last_ev_ms = u.attach_ms;
 		}
 
-		if (u.irq_attached && u.irq_masked && !u.quiesced) {
+		int defer_dataend = (u.ep0_tx_pending && u.ep0_tx_sent >= u.ep0_tx_total && !u.ep0_tx_need_zlp);
+		if (u.irq_attached && u.irq_masked && !u.quiesced && !defer_dataend) {
 			u.irq_masked = 0;
 			gic_v3_spi_unmask(MTU3_IRQ_INTID);
 		}
 
-		/* 0196 timing: 100 us requeue while EP0 DATAEND or bus-reset beat is pending, else 1 ms */
+		/* 0196/0113d timing: deferred DATAEND gets a quiet 200 us tick; multi-pkt/reset 100 us; idle 1 ms */
 		uint64_t deadline = 0;
-		if (u.ep0_tx_pending || u.rst_seen || ecm_txq_pending() || u.notify_step != 0) {
+		if (defer_dataend) {
+			clock_interval_to_deadline(200, NSEC_PER_USEC, &deadline);
+		} else if (u.ep0_tx_pending || u.rst_seen || ecm_txq_pending() || u.notify_step != 0) {
 			clock_interval_to_deadline(100, NSEC_PER_USEC, &deadline);
 		} else {
 			clock_interval_to_deadline(1, NSEC_PER_MSEC, &deadline);
@@ -2012,16 +2084,24 @@ configure_en0_ipv4(void)
 /* ---- Entry points ------------------------------------------------------------------------------ */
 
 void
+hakios_mtk_usb_ecm_log_stats(void)
+{
+	if (!u.initialized) {
+		return;
+	}
+	printf("mtk_usb_ecm: stats setups=%u rst=%u addr=%u cfg=%u alt=%u txp=%u de=%u fblk=%u rw=%u ep0=0x%x last=%02x/%02x/%04x/%u\n",
+	    u.setups_seen, u.resets_seen, u.dev_addr, u.config, u.ecm_alt,
+	    u.ep0_txpkts, u.ep0_dataends, u.ep0_fifo_blocked, u.ep0_rewinds,
+	    u.mac ? rd32(u.mac, EP0CSR_OFF) : 0u,
+	    u.last_req_type, u.last_req, u.last_val, u.last_wlen);
+}
+
+void
 hakios_mtk_usb_ecm_quiesce(void)
 {
 	if (!u.initialized || u.quiesced) {
 		return;
 	}
-	printf("mtk_usb_ecm: stats setups=%u rst=%u addr=%u cfg=%u alt=%u irq=%u ep0=0x%x otg=0x%x last=%02x/%02x/%04x\n",
-	    u.setups_seen, u.resets_seen, u.dev_addr, u.config, u.ecm_alt, u.irq_count,
-	    u.mac ? rd32(u.mac, EP0CSR_OFF) : 0u,
-	    u.ippc ? rd32(u.ippc, IPPC_OTG_STS) : 0u,
-	    u.last_req_type, u.last_req, u.last_val);
 	u.quiesced = 1;
 	if (u.irq_attached) {
 		gic_v3_spi_detach(MTU3_IRQ_INTID);
@@ -2135,7 +2215,7 @@ hakios_mtk_usb_ecm_init(void)
 
 	mac_soft_connect(u.mac, u.phy, 1);
 
-	printf("mtk_usb_ecm: ready (mtu3=0x%lx ippc_sts=0x%x/0x%x irq=%u:%s VID=1209 PID=0002)\n",
+	printf("mtk_usb_ecm: ready (mtu3=0x%lx ippc_sts=0x%x/0x%x irq=%u:%s VID=1209 PID=0003)\n",
 	    MTU3_PA, rd32(u.ippc, IPPC_PW_STS1), rd32(u.ippc, IPPC_PW_STS2),
 	    MTU3_IRQ_INTID, u.irq_attached ? "ok" : "poll");
 }
