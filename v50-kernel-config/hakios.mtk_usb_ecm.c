@@ -84,10 +84,20 @@ extern void gic_v3_spi_detach(uint32_t intid);
 #define U3_HOST_SEL         (1u << 2)
 
 #define PHY_U2_ACR0         0x0300u
+#define PHY_U2_ACR1         0x0304u
 #define PHY_U2_ACR5         0x0314u
 #define PHY_U2_ACR6         0x0318u
 #define PHY_U2_ACR3         0x031cu
 #define PHY_U2_ACR4         0x0320u
+#define ACR1_VRT_SEL        (0x7u << 12)
+#define ACR1_TERM_SEL       (0x7u << 8)
+#define ACR6_REV6_SEL       (0x3u << 30)
+#define ACR6_DISCTH_SEL     (0xfu << 4)
+#define RUBY_U2_EYE_VRT     6u
+#define RUBY_U2_EYE_TERM    6u
+#define RUBY_U2_EYE_REV6    1u
+#define RUBY_U2_EYE_DISC    7u
+#define RUBY_GOLDEN_ACR5    0x40804000u
 #define PHY_U2_DTM0         0x0368u
 #define PHY_U2_DTM1         0x036cu
 #define PHY_U3_SPLLC        0x0700u
@@ -138,8 +148,8 @@ extern void gic_v3_spi_detach(uint32_t intid);
 #define LV1_BMU_INTR        (1u << 0)
 #define LV1_QMU_INTR        (1u << 1)
 #define LV1_MAC3_INTR       (1u << 2)
-#define LV1_MAC2_INTR       (1u << 3)
-#define LV1_EP0_INTR        (1u << 4)
+#define LV1_MAC2_INTR       (1u << 4)
+#define LV1_EPCTRL_INTR     (1u << 5)
 
 #define EPISR_OFF           0x0080u
 #define EPIER_OFF           0x0084u
@@ -251,9 +261,17 @@ extern void gic_v3_spi_detach(uint32_t intid);
 #define DEV_CONF_OFF        0x0800u
 #define MISC_CTRL_OFF       0x0c84u
 #define USB3_CONFIG_OFF     0x141cu
+#define DEV_EPCTL_LPM_OFF   0x0828u
+#define USB3_LTSSM_OFF      0x1410u
 #define MAC2_PM_CTRL_OFF    0x2404u
+#define MAC2_TEST_MODE_OFF  0x2414u
 #define MAC2_INTR_EN_OFF    0x2418u
 #define MAC2_INTR_STS_OFF   0x241cu
+#define MAC2_BUS_PERF_OFF   0x2420u
+#define MAC2_LPM_TIM_OFF    0x2444u
+#define MAC2_LPM_MISC_OFF   0x244cu
+#define BUS_PERF_NOISE_STILL_TR (1u << 21)
+#define PM_CTRL_LPM_HRWE    (1u << 10)
 #define MAC2_INTR_SUSPEND   (1u << 0)
 #define MAC2_INTR_RESUME    (1u << 1)
 #define MAC2_INTR_RESET     (1u << 2)
@@ -437,10 +455,17 @@ static struct {
 	int         reset_phase;
 	uint64_t    reset_seen_ms;
 
-	uint8_t     ep0_tx_buf[128];
+	uint8_t     ep0_tx_buf[512];
 	uint32_t    ep0_tx_total;
 	uint32_t    ep0_tx_sent;
+	uint32_t    ep0_tx_need_zlp;
 	int         ep0_tx_pending;
+	uint32_t    rst_armed;
+	uint32_t    rst_seen;
+	uint32_t    last_req_type;
+	uint32_t    last_req;
+	uint32_t    last_val;
+	uint32_t    last_wlen;
 
 	/* EP3 Interrupt IN link notifications */
 	volatile uint32_t notify_step;      /* 0=idle, 1=NETWORK_CONNECTION, 2=SPEED_CHANGE */
@@ -535,9 +560,34 @@ u3_phy_on(vm_offset_t phy)
 }
 
 static void
+u2_phy_off(vm_offset_t phy)
+{
+	uint32_t v;
+
+	v = rd32(phy, PHY_U2_DTM0);
+	v &= ~(DTM0_FORCE_UART_EN | DTM0_RG_XCVRSEL_MSK | DTM0_RG_DATAIN_MSK);
+	v |= DTM0_PART_MASK;
+	wr32(phy, PHY_U2_DTM0, v);
+
+	v = rd32(phy, PHY_U2_DTM1);
+	v &= ~(DTM1_UART_EN | DTM1_RG_VBUSVALID | DTM1_RG_AVALID);
+	v |= DTM1_RG_SESSEND;
+	wr32(phy, PHY_U2_DTM1, v);
+
+	v = rd32(phy, PHY_U2_ACR6);
+	v &= ~ACR6_OTG_VBUSCMP_EN;
+	wr32(phy, PHY_U2_ACR6, v);
+
+	delay(800);
+}
+
+static void
 u2_phy_on(vm_offset_t phy)
 {
 	uint32_t v;
+
+	/* Cold-cycle U2 PHY first (ruby_usb_plat.c / 0329a5) to clear stale bootloader state */
+	u2_phy_off(phy);
 
 	/* u2_phy_instance_init (tphy v2, verified on ruby MT6877) */
 	v = rd32(phy, PHY_U2_DTM0);
@@ -564,6 +614,17 @@ u2_phy_on(vm_offset_t phy)
 	v = rd32(phy, PHY_U2_ACR6);
 	v &= ~(ACR6_BC11_SW_EN | 0xfu);
 	v |= 2u;                                    /* SQTH = 2 */
+	wr32(phy, PHY_U2_ACR6, v);
+
+	/* 0185: ruby board HS eye tuning (mt6877.dts device values) */
+	v = rd32(phy, PHY_U2_ACR1);
+	v &= ~(ACR1_VRT_SEL | ACR1_TERM_SEL);
+	v |= (RUBY_U2_EYE_VRT << 12) | (RUBY_U2_EYE_TERM << 8);
+	wr32(phy, PHY_U2_ACR1, v);
+
+	v = rd32(phy, PHY_U2_ACR6);
+	v &= ~(ACR6_REV6_SEL | ACR6_DISCTH_SEL);
+	v |= (RUBY_U2_EYE_REV6 << 30) | (RUBY_U2_EYE_DISC << 4);
 	wr32(phy, PHY_U2_ACR6, v);
 
 	/* u2_phy_instance_power_on */
@@ -608,6 +669,9 @@ u2_phy_on(vm_offset_t phy)
 	v |= DTM1_RG_VBUSVALID | DTM1_RG_AVALID;
 	v &= ~DTM1_RG_SESSEND;
 	wr32(phy, PHY_U2_DTM1, v);
+
+	/* Golden ACR5 from ruby_usb_plat.c */
+	wr32(phy, PHY_U2_ACR5, RUBY_GOLDEN_ACR5);
 }
 
 static void
@@ -691,17 +755,20 @@ mac_soft_connect(vm_offset_t mac, vm_offset_t phy, int on)
 	uint32_t v;
 
 	if (on) {
-		v = rd32(phy, PHY_U2_ACR3) | ACR3_PUPD_BIST_EN | ACR3_EN_PU_DP;
+		/* 0308b: NEVER set ACR3_PUPD_BIST_EN (causes host XactErr on IN tokens) */
+		v = (rd32(phy, PHY_U2_ACR3) & ~ACR3_PUPD_BIST_EN) | ACR3_EN_PU_DP;
 		wr32(phy, PHY_U2_ACR3, v);
 		delay(1000);
 		v = rd32(mac, MISC_CTRL_OFF) | 0x3u;
 		wr32(mac, MISC_CTRL_OFF, v);
-		v = rd32(mac, MAC2_PM_CTRL_OFF) | (1u << 6) | (1u << 0);
+		v = rd32(mac, MAC2_PM_CTRL_OFF) | PM_CTRL_LPM_HRWE | (1u << 6) | (1u << 5) | (1u << 0);
 		wr32(mac, MAC2_PM_CTRL_OFF, v);
 		delay(2000);
 	} else {
 		v = rd32(mac, MAC2_PM_CTRL_OFF) & ~((1u << 6) | (1u << 0));
 		wr32(mac, MAC2_PM_CTRL_OFF, v);
+		v = rd32(mac, MISC_CTRL_OFF) & ~0x3u;
+		wr32(mac, MISC_CTRL_OFF, v);
 		v = rd32(phy, PHY_U2_ACR3) & ~(ACR3_PUPD_BIST_EN | ACR3_EN_PU_DP);
 		wr32(phy, PHY_U2_ACR3, v);
 	}
@@ -1417,20 +1484,8 @@ configure_data_endpoints(vm_offset_t mac)
 static void
 ep0_write_fifo(vm_offset_t mac, const uint8_t *src, uint32_t len)
 {
-	uint32_t i = 0;
-	while (i + 4u <= len) {
-		uint32_t w = (uint32_t)src[i] | ((uint32_t)src[i + 1] << 8) |
-		    ((uint32_t)src[i + 2] << 16) | ((uint32_t)src[i + 3] << 24);
-		wr32(mac, FIFO0_OFF, w);
-		i += 4u;
-	}
-	if (i + 2u <= len) {
-		uint16_t w = (uint16_t)src[i] | ((uint16_t)src[i + 1] << 8);
-		wr16(mac, FIFO0_OFF, w);
-		i += 2u;
-	}
-	while (i < len) {
-		wr8(mac, FIFO0_OFF, src[i++]);
+	for (uint32_t i = 0; i < len; i++) {
+		wr8(mac, FIFO0_OFF, src[i]);
 	}
 }
 
@@ -1446,8 +1501,59 @@ static void
 ep0_stall(vm_offset_t mac)
 {
 	uint32_t csr = rd32(mac, EP0CSR_OFF) & EP0_W1C_BITS;
-	csr |= EP0_SETUPPKTRDY | EP0_SENDSTALL;
+	csr |= EP0_SENDSTALL | EP0_SETUPPKTRDY;
 	wr32(mac, EP0CSR_OFF, csr);
+}
+
+/*
+ * 0113c + 0113d (verified on ruby):
+ * - strict=1 (inline inside ep0_send): feed remaining 64B packets for
+ *   multi-packet descriptors (e.g. 80B config desc), NEVER write DATAEND!
+ * - strict=0 (deferred to next worker tick): once TXPKTRDY clears and all
+ *   bytes are sent, assert EP0_DATAEND (or ZLP first if needed).
+ * Writing DATAEND inline causes the host to answer GET_DESCRIPTOR with a
+ * port reset in an endless reconnect loop.
+ */
+static int
+ep0_tx_step(vm_offset_t mac, int strict)
+{
+	uint32_t csr;
+
+	if (!u.ep0_tx_pending) {
+		return 0;
+	}
+	csr = rd32(mac, EP0CSR_OFF);
+	if (csr & (EP0_SETUPPKTRDY | EP0_SENTSTALL)) {
+		u.ep0_tx_pending = 0;
+		return 0;
+	}
+	if (csr & EP0_TXPKTRDY) {
+		return 0;
+	}
+	if (u.ep0_tx_sent < u.ep0_tx_total) {
+		uint32_t n = u.ep0_tx_total - u.ep0_tx_sent;
+		if (n > 64u) {
+			n = 64u;
+		}
+		ep0_write_fifo(mac, u.ep0_tx_buf + u.ep0_tx_sent, n);
+		csr = rd32(mac, EP0CSR_OFF) & EP0_W1C_BITS;
+		wr32(mac, EP0CSR_OFF, csr | EP0_TXPKTRDY);
+		u.ep0_tx_sent += n;
+		return 1;
+	}
+	if (u.ep0_tx_need_zlp) {
+		u.ep0_tx_need_zlp = 0;
+		csr = rd32(mac, EP0CSR_OFF) & EP0_W1C_BITS;
+		wr32(mac, EP0CSR_OFF, csr | EP0_TXPKTRDY);
+		return 1;
+	}
+	if (strict) {
+		return 0;
+	}
+	csr = rd32(mac, EP0CSR_OFF) & EP0_W1C_BITS;
+	wr32(mac, EP0CSR_OFF, csr | EP0_DATAEND);
+	u.ep0_tx_pending = 0;
+	return 1;
 }
 
 static void
@@ -1462,37 +1568,34 @@ ep0_send(vm_offset_t mac, const uint8_t *src, uint32_t desc_len, uint32_t wlen)
 		total = sizeof(u.ep0_tx_buf);
 	}
 	memcpy(u.ep0_tx_buf, src, total);
+	u.ep0_tx_total = total;
+	u.ep0_tx_sent = 0;
+	u.ep0_tx_need_zlp = (total < wlen && total > 0 && (total % 64u) == 0) ? 1u : 0u;
 
 	/* Clear SETUPPKTRDY + assert DPHTX (data-phase TX) before loading FIFO0 */
 	uint32_t csr = rd32(mac, EP0CSR_OFF) & EP0_W1C_BITS;
 	wr32(mac, EP0CSR_OFF, csr | EP0_SETUPPKTRDY | EP0_DPHTX);
 
-	uint32_t sent = 0;
-	while (sent < total) {
-		uint32_t chunk = total - sent;
-		if (chunk > 64u) {
-			chunk = 64u;
-		}
-		ep0_write_fifo(mac, u.ep0_tx_buf + sent, chunk);
-		csr = rd32(mac, EP0CSR_OFF) & EP0_W1C_BITS;
-		wr32(mac, EP0CSR_OFF, csr | EP0_TXPKTRDY);
-		for (uint32_t spin = 0; spin < 1000u; spin++) {
-			if (!(rd32(mac, EP0CSR_OFF) & EP0_TXPKTRDY)) {
+	uint32_t chunk = (total > 64u) ? 64u : total;
+	if (chunk > 0) {
+		ep0_write_fifo(mac, u.ep0_tx_buf, chunk);
+	}
+	csr = rd32(mac, EP0CSR_OFF) & EP0_W1C_BITS;
+	wr32(mac, EP0CSR_OFF, csr | EP0_TXPKTRDY);
+	u.ep0_tx_sent = chunk;
+	u.ep0_tx_pending = 1;
+
+	/* For multi-packet responses (>64B), spin up to 2 ms to feed remaining packets;
+	 * DATAEND itself is ALWAYS deferred to the next tick (0113d). */
+	if (u.ep0_tx_sent < u.ep0_tx_total || u.ep0_tx_need_zlp) {
+		for (uint32_t spin = 0; spin < 200u && u.ep0_tx_pending; spin++) {
+			(void)ep0_tx_step(mac, 1);
+			if (u.ep0_tx_sent >= u.ep0_tx_total && !u.ep0_tx_need_zlp) {
 				break;
 			}
 			delay(10);
 		}
-		sent += chunk;
 	}
-
-	/* Wait briefly (~2 ms max) for FIFO drain, then always write DATAEND (0107 semantics) */
-	delay(100);
-	for (uint32_t spin = 0; spin < 20u && (rd32(mac, EP0CSR_OFF) & EP0_FIFOFULL); spin++) {
-		delay(100);
-	}
-	csr = rd32(mac, EP0CSR_OFF) & EP0_W1C_BITS;
-	wr32(mac, EP0CSR_OFF, csr | EP0_DATAEND);
-	u.ep0_tx_pending = 0;
 }
 
 static const uint8_t *
@@ -1553,6 +1656,10 @@ ep0_handle_setup(vm_offset_t mac)
 	u.setups_seen++;
 	u.last_ev_ms = now_ms();
 	u.ep0_tx_pending = 0;
+	u.last_req_type = type;
+	u.last_req = req;
+	u.last_val = val;
+	u.last_wlen = wlen;
 
 	/* CDC-ECM class-specific requests (SET_ETHERNET_PACKET_FILTER 0x43, multicast, etc.) */
 	if ((type & 0x60u) == 0x20u) {
@@ -1687,6 +1794,8 @@ ep0_service(vm_offset_t mac)
 	}
 	if (csr & EP0_SETUPPKTRDY) {
 		ep0_handle_setup(mac);
+	} else if (u.ep0_tx_pending) {
+		(void)ep0_tx_step(mac, 0);
 	}
 
 	csr = rd32(mac, EP0CSR_OFF);
@@ -1718,8 +1827,9 @@ usb_rearm(vm_offset_t mac)
 		wr32(mac, EP_RST_OFF, 0);
 	}
 
-	ep0_quiet_reset(mac);
-	uint32_t csr = (rd32(mac, EP0CSR_OFF) & EP0_W1C_BITS & ~EP0_MAXPKTSZ_MSK) | 64u;
+	uint32_t csr = (rd32(mac, EP0CSR_OFF) & EP0_W1C_BITS);
+	csr |= EP0_RXPKTRDY | EP0_SETUPPKTRDY | EP0_SENTSTALL;
+	csr = (csr & ~EP0_MAXPKTSZ_MSK) | 64u;
 	wr32(mac, EP0CSR_OFF, csr);
 
 	wr32(mac, EPISR_OFF, rd32(mac, EPISR_OFF));
@@ -1747,27 +1857,30 @@ static void
 usb_check_bus_reset(vm_offset_t mac)
 {
 	uint32_t m2 = rd32(mac, MAC2_INTR_STS_OFF);
-	uint64_t t = now_ms();
 
-	if (m2 & MAC2_INTR_RESET) {
-		wr32(mac, MAC2_INTR_STS_OFF, m2 & (MAC2_INTR_RESET | MAC2_INTR_RESUME | MAC2_INTR_SUSPEND));
-		u.resets_seen++;
-		u.last_ev_ms = t;
-		if (u.reset_phase == 0) {
-			u.reset_phase = 1;
-			u.reset_seen_ms = t;
-			usb_rearm(mac);
-			if (u.resets_seen <= 6) {
-				printf("mtk_usb_ecm: USB bus reset #%u\n", u.resets_seen);
-			}
-		}
-		return;
-	}
 	if (m2 & (MAC2_INTR_RESUME | MAC2_INTR_SUSPEND)) {
 		wr32(mac, MAC2_INTR_STS_OFF, m2 & (MAC2_INTR_RESUME | MAC2_INTR_SUSPEND));
 	}
-	if (u.reset_phase == 1 && (t >= u.reset_seen_ms + 50ULL || (rd32(mac, EP0CSR_OFF) & EP0_SETUPPKTRDY))) {
-		u.reset_phase = 0;
+	if (!(m2 & MAC2_INTR_RESET)) {
+		u.rst_seen = 0;
+		u.rst_armed = 1;
+		return;
+	}
+	if (!u.rst_armed) {
+		wr32(mac, MAC2_INTR_STS_OFF, MAC2_INTR_RESET);
+		return;
+	}
+	if (!u.rst_seen) {
+		u.rst_seen = 1;
+		return;
+	}
+	u.rst_seen = 0;
+	wr32(mac, MAC2_INTR_STS_OFF, MAC2_INTR_RESET);
+	u.resets_seen++;
+	u.last_ev_ms = now_ms();
+	usb_rearm(mac);
+	if (u.resets_seen <= 6) {
+		printf("mtk_usb_ecm: USB bus reset #%u\n", u.resets_seen);
 	}
 }
 
@@ -1805,27 +1918,20 @@ mtk_usb_worker(__unused void *arg, __unused wait_result_t wr)
 			continue;
 		}
 
-		/* Drain up to 8 quick passes if events keep arriving */
-		for (int pass = 0; pass < 8 && !u.quiesced; pass++) {
-			usb_service_once();
-			uint32_t lv1 = rd32(u.mac, LV1ISR_OFF);
-			if (!(lv1 & (LV1_BMU_INTR | LV1_QMU_INTR | LV1_MAC2_INTR | LV1_EP0_INTR)) &&
-			    !ecm_txq_pending() && u.notify_step == 0) {
-				break;
-			}
-		}
+		usb_service_once();
 
 		/* If never configured after 12s (and 2s quiet), detach/reattach once so late cables work */
 		uint64_t t = now_ms();
 		if (!u.cfg_seen && u.reattach_cnt < 6 &&
 		    t >= u.attach_ms + 12000ULL && t >= u.last_ev_ms + 2000ULL) {
 			u.reattach_cnt++;
-			printf("mtk_usb_ecm: no host config yet, reattach #%u (setups=%u rst=%u irq=%u ep0=0x%x otg=0x%x)\n",
-			    u.reattach_cnt, u.setups_seen, u.resets_seen, u.irq_count,
-			    rd32(u.mac, EP0CSR_OFF), rd32(u.ippc, IPPC_OTG_STS));
+			printf("mtk_usb_ecm: reattach #%u (setups=%u rst=%u addr=%u irq=%u ep0=0x%x otg=0x%x last=%02x/%02x/%04x)\n",
+			    u.reattach_cnt, u.setups_seen, u.resets_seen, u.dev_addr, u.irq_count,
+			    rd32(u.mac, EP0CSR_OFF), rd32(u.ippc, IPPC_OTG_STS),
+			    u.last_req_type, u.last_req, u.last_val);
 			mac_soft_connect(u.mac, u.phy, 0);
 			usb_rearm(u.mac);
-			delay_for_interval(150, NSEC_PER_MSEC);
+			delay_for_interval(500, NSEC_PER_MSEC);
 			mac_soft_connect(u.mac, u.phy, 1);
 			u.attach_ms = now_ms();
 			u.last_ev_ms = u.attach_ms;
@@ -1836,9 +1942,13 @@ mtk_usb_worker(__unused void *arg, __unused wait_result_t wr)
 			gic_v3_spi_unmask(MTU3_IRQ_INTID);
 		}
 
-		/* Sleep up to 2 ms (or wake immediately on IRQ / TX enqueue) */
+		/* 0196 timing: 100 us requeue while EP0 DATAEND or bus-reset beat is pending, else 1 ms */
 		uint64_t deadline = 0;
-		clock_interval_to_deadline(1, NSEC_PER_MSEC, &deadline);
+		if (u.ep0_tx_pending || u.rst_seen || ecm_txq_pending() || u.notify_step != 0) {
+			clock_interval_to_deadline(100, NSEC_PER_USEC, &deadline);
+		} else {
+			clock_interval_to_deadline(1, NSEC_PER_MSEC, &deadline);
+		}
 		assert_wait_deadline((event_t)&u.wake_chan, THREAD_UNINT, deadline);
 		thread_block(THREAD_CONTINUE_NULL);
 	}
@@ -1907,6 +2017,11 @@ hakios_mtk_usb_ecm_quiesce(void)
 	if (!u.initialized || u.quiesced) {
 		return;
 	}
+	printf("mtk_usb_ecm: stats setups=%u rst=%u addr=%u cfg=%u alt=%u irq=%u ep0=0x%x otg=0x%x last=%02x/%02x/%04x\n",
+	    u.setups_seen, u.resets_seen, u.dev_addr, u.config, u.ecm_alt, u.irq_count,
+	    u.mac ? rd32(u.mac, EP0CSR_OFF) : 0u,
+	    u.ippc ? rd32(u.ippc, IPPC_OTG_STS) : 0u,
+	    u.last_req_type, u.last_req, u.last_val);
 	u.quiesced = 1;
 	if (u.irq_attached) {
 		gic_v3_spi_detach(MTU3_IRQ_INTID);
@@ -1964,25 +2079,35 @@ hakios_mtk_usb_ecm_init(void)
 
 	ps5169_enable(u.gpio);
 
-	/* MAC2 HS device mode configuration (0086 + 0091 + 0103) */
+	/* MAC2 HS device mode + vendor MT6877 parity (0086 + 0091 + 0185 + 0283 + 0285 + 0287) */
 	wr32(u.mac, LV1IECR_OFF, ~0u);
+	wr32(u.mac, EPIECR_OFF, ~0u);
 	wr32(u.mac, USB3_CONFIG_OFF, rd32(u.mac, USB3_CONFIG_OFF) & ~1u);
+	wr32(u.mac, USB3_LTSSM_OFF, rd32(u.mac, USB3_LTSSM_OFF) & ~(1u << 2)); /* 0287: SOFT_U3_EXIT_EN=0 */
 	wr32(u.mac, MAC2_PM_CTRL_OFF,
-	    (rd32(u.mac, MAC2_PM_CTRL_OFF) | (1u << 5)) & ~((1u << 6) | (1u << 0)));
+	    (rd32(u.mac, MAC2_PM_CTRL_OFF) | PM_CTRL_LPM_HRWE | (1u << 5)) & ~((1u << 6) | (1u << 0)));
 	wr32(u.mac, DEV_CONF_OFF, 0);
+	wr32(u.mac, DEV_EPCTL_LPM_OFF, 0x0006000fu);                          /* 0287: U3D_USB2_EPCTL_LPM */
+	wr32(u.mac, MAC2_BUS_PERF_OFF, rd32(u.mac, MAC2_BUS_PERF_OFF) | BUS_PERF_NOISE_STILL_TR); /* 0185 */
+	wr32(u.mac, MAC2_TEST_MODE_OFF, rd32(u.mac, MAC2_TEST_MODE_OFF) | 0x400u); /* 0285 */
+	wr32(u.mac, MAC2_LPM_TIM_OFF, 0xa4f0u);                                 /* 0285 */
+	wr32(u.mac, MAC2_LPM_MISC_OFF, rd32(u.mac, MAC2_LPM_MISC_OFF) | 0x1u);  /* 0285 */
 	wr32(u.ippc, IPPC_U2_CTRL_0P, rd32(u.ippc, IPPC_U2_CTRL_0P) & ~U2_OTG_SEL);
 
-	/* Clean detach window so host drops any bootloader USB state */
+	/* Clean 500 ms detach window (0114/0116) so host drops any bootloader USB state */
+	wr32(u.mac, MISC_CTRL_OFF, rd32(u.mac, MISC_CTRL_OFF) & ~0x3u);
 	ep0_quiet_reset(u.mac);
-	delay(150000);
+	delay(500000);
 
-	/* Arm EP0 & enable MTU3 interrupts before soft-connect */
+	/* Arm EP0 & enable ONLY serviced MTU3 IRQ groups: BMU (EP0) + MAC2 (reset/resume/suspend) (0196) */
 	uint32_t csr = (rd32(u.mac, EP0CSR_OFF) & EP0_W1C_BITS & ~EP0_MAXPKTSZ_MSK) | 64u;
 	wr32(u.mac, EP0CSR_OFF, csr);
+	wr32(u.mac, EPISR_OFF, rd32(u.mac, EPISR_OFF));
 	wr32(u.mac, MAC2_INTR_STS_OFF, rd32(u.mac, MAC2_INTR_STS_OFF));
+	usb_check_bus_reset(u.mac); /* arm two-beat while idle */
 	wr32(u.mac, MAC2_INTR_EN_OFF, rd32(u.mac, MAC2_INTR_EN_OFF) | MAC2_INTR_RESET | MAC2_INTR_RESUME | MAC2_INTR_SUSPEND);
 	wr32(u.mac, EPIESR_OFF, EPISR_EP0ISR | EPISR_SETUPEND);
-	wr32(u.mac, LV1IESR_OFF, LV1_BMU_INTR | LV1_QMU_INTR | LV1_MAC2_INTR | LV1_EP0_INTR);
+	wr32(u.mac, LV1IESR_OFF, LV1_BMU_INTR | LV1_MAC2_INTR);
 
 	/* 2. Attach BSD en0 + configure static 192.168.7.2/24 */
 	memcpy(usb_ecm_link.address, ecm_phone_mac, ETHER_ADDR_LEN);
