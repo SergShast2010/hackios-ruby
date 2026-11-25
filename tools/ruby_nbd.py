@@ -76,7 +76,18 @@ static void put_u64(u64 v) {
     while (i--) sc3(4, 1, (long)&b[i], 1);
 }
 
-void start(void) {
+void start_main(void) __attribute__((noreturn, noinline));
+__asm__(
+    ".text\n"
+    ".globl _start\n"
+    ".p2align 2\n"
+    "_start:\n"
+    "\tmov x0, sp\n"
+    "\tand x0, x0, #-16\n"
+    "\tmov sp, x0\n"
+    "\tb _start_main\n"
+);
+void start_main(void) {
     long pid = sc3(20, 0, 0, 0);
     long ppid = sc3(39, 0, 0, 0);
     put("APFS_EXEC_OK: hello from Mach-O binary on network APFS! pid=");

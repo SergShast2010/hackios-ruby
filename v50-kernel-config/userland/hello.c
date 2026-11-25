@@ -1293,8 +1293,27 @@ run_tcp_services(int con_out, long hold_s)
 	show_str_sysctl(con_out, 0, "kern.hakios.nbd", ufs_buf, sizeof(ufs_buf));
 }
 
+/*
+ * XNU exec_copyout_strings() only aligns initial arm64 user SP to 8 bytes
+ * (dynamic binaries rely on dyld's _dyld_start to align SP to 16 bytes).
+ * With SCTLR_EL1.SA0=1 enabled, a raw C _start faults with ESR_EC_SP_ALIGN
+ * (SIGBUS -> initproc exited panic) whenever initial (SP & 15) == 8.
+ */
+void start_main(void) __attribute__((noreturn, noinline));
+
+__asm__(
+	".text\n"
+	".globl _start\n"
+	".p2align 2\n"
+	"_start:\n"
+	"\tmov x0, sp\n"
+	"\tand x0, x0, #-16\n"
+	"\tmov sp, x0\n"
+	"\tb _start_main\n"
+);
+
 void
-start(void)
+start_main(void)
 {
 	int fd = (int)syscall3_err(SYS_open, (long)"/dev/console", O_RDWR, 0);
 

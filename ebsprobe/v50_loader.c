@@ -842,11 +842,11 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
     int real_panic = valid_log && sfind_n(log, log_len, "panic(") && !sfind_n(log, log_len, "PID 1 DONE") && !sfind_n(log, log_len, "INPUT SUMMARY:");
 
     if (hello_ok && !real_panic) {
-        ui_line(ctx, 0, "RUBY v0.56: XNU 4GB+SMP+USB+NBD PASS!", COL_GREEN);
+        ui_line(ctx, 0, "RUBY v0.56b: XNU 4GB+SMP+USB+NBD PASS!", COL_GREEN);
     } else if (real_panic) {
-        ui_line(ctx, 0, "RUBY v0.56: XNU PANIC (SEE LOG)", COL_RED);
+        ui_line(ctx, 0, "RUBY v0.56b: XNU PANIC (SEE LOG)", COL_RED);
     } else {
-        ui_line(ctx, 0, "RUBY v0.56: XNU RETURNED (SEE LOG)", COL_YELLOW);
+        ui_line(ctx, 0, "RUBY v0.56b: XNU RETURNED (SEE LOG)", COL_YELLOW);
     }
     ui_hex(ctx, 1, "RAMbase: ", ctx->xnu_phys_base, COL_WHITE);
     ui_hex(ctx, 2, "RAMsize: ", ctx->xnu_mem_size, ctx->ram_probe_fail_pa ? COL_YELLOW : COL_GREEN);
@@ -882,6 +882,29 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
     if (valid_log && ctx->fb_base) {
         uint32_t y_start = (reason == 1 || ctx->ram_probe_fail_pa || !hello_ok) ? 376u : 320u;
         /* Show mtk_ram_diag first (always visible), then key touch/UFS/buttons init lines */
+        if (real_panic) {
+            uint64_t scan = 0;
+            uint32_t pshown = 0;
+            while (scan < log_len && pshown < 2u && y_start + 56u < ctx->fb_height) {
+                uint64_t ls = scan;
+                while (scan < log_len && log[scan] != '\n') scan++;
+                uint64_t ll = scan - ls;
+                if (scan < log_len && log[scan] == '\n') scan++;
+                if (ll > 0 && sfind_n(log + ls, ll, "panic(")) {
+                    char pbuf[96];
+                    uint32_t pn = 0;
+                    uint64_t pcopy = ll < 88u ? ll : 88u;
+                    for (uint64_t pk = 0; pk < pcopy; pk++) {
+                        char pc = log[ls + pk];
+                        if (pc >= 32 && pc < 127) pbuf[pn++] = pc;
+                    }
+                    pbuf[pn] = 0;
+                    fb_draw_text(ctx, 16u, y_start, 2u, pbuf, COL_RED, 0u);
+                    y_start += 26u;
+                    pshown++;
+                }
+            }
+        }
         if (reason != 1 && !real_panic) {
             uint32_t shown = 0;
             for (int pass = 0; pass < 2; pass++) {
@@ -1076,7 +1099,7 @@ __attribute__((noinline, noreturn)) void V50OnException(
     ctx->physical = 1;
     g_con = NULL;
     fb_clear(ctx);
-    ui_line(ctx, 0, "RUBY v0.56: EARLY LOADER EXCEPTION", COL_RED);
+    ui_line(ctx, 0, "RUBY v0.56b: EARLY LOADER EXCEPTION", COL_RED);
     ui_hex(ctx, 2, "Vector: ", vec, COL_YELLOW);
     ui_hex(ctx, 3, "ESR:    ", esr, COL_RED);
     ui_hex(ctx, 4, "ELR:    ", elr, COL_WHITE);

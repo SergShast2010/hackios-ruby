@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build Mu-ruby v0.56: source-built HakiOS XNU (MT6877, 4 GiB RAM, 8-core SMP, RO-UFS, USB CDC-ECM) + PID 1."""
+"""Build Mu-ruby v0.56b: source-built HakiOS XNU (MT6877, 4 GiB RAM, 8-core SMP, RO-UFS, USB CDC-ECM) + PID 1."""
 import argparse
 import hashlib
 import json
@@ -17,8 +17,8 @@ DEFAULT_KERNEL = Path('/home/sergsh/hackios/hakios-xnu-kernel/hakios-kernel')
 DEFAULT_RAMDISK = Path('/home/sergsh/hackios/hakios-xnu-kernel/userland/hello')
 MKPAYLOAD = Path('/home/sergsh/hackios/hakios-xnu-kernel/xnuloader/mkpayload.py')
 MKAPFS = Path('/home/sergsh/hackios/hakios-xnu-kernel/tools/apfs/mkapfs.py')
-V50_OUT = ROOT / 'out' / 'v56'
-V50_IMAGE = 'Mu-ruby-v0.56-hakios-nbd-apfs.img'
+V50_OUT = ROOT / 'out' / 'v56b'
+V50_IMAGE = 'Mu-ruby-v0.56b-hakios-nbd-apfs.img'
 
 
 def sha256_bytes(b: bytes) -> str:
@@ -94,14 +94,14 @@ def build(out: Path, kernel: Path, ramdisk: Path, cmdline: str, kver: str, pack_
         image_bytes, report, _chunks = package_image.build(
             pack_base.read_bytes(), efi_bytes, payload=payload_bytes
         )
-        image_name = 'Mu-ruby-v0.56-apple-splash.img' if apple_splash else V50_IMAGE
+        image_name = 'Mu-ruby-v0.56b-apple-splash.img' if apple_splash else V50_IMAGE
         img = out / image_name
         img.write_bytes(image_bytes)
         (out / 'v50_loader.efi').write_bytes(efi_bytes)
         (out / 'PAYLOAD.XNP').write_bytes(payload_bytes)
 
         manifest = {
-            'version': 'v0.56',
+            'version': 'v0.56b',
             'image': image_name,
             'apple_splash': apple_splash,
             'image_bytes': len(image_bytes),
@@ -130,12 +130,12 @@ def build(out: Path, kernel: Path, ramdisk: Path, cmdline: str, kver: str, pack_
 
 
 if __name__ == '__main__':
-    ap = argparse.ArgumentParser(description='Build Mu-ruby v0.56 with source-built XNU + TCP console PID 1')
+    ap = argparse.ArgumentParser(description='Build Mu-ruby v0.56b with source-built XNU + TCP console PID 1')
     ap.add_argument('--out', type=Path, default=V50_OUT)
     ap.add_argument('--kernel', type=Path, default=DEFAULT_KERNEL)
     ap.add_argument('--ramdisk', type=Path, default=DEFAULT_RAMDISK)
     ap.add_argument('--cmdline', default='')
-    ap.add_argument('--kernel-version', default='ruby-v0.56-mt6877')
+    ap.add_argument('--kernel-version', default='ruby-v0.56b-mt6877')
     ap.add_argument('--pack-base', type=Path, default=PACK_BASE)
     ap.add_argument('--apple-splash', action='store_true', help='Boot with Apple splash logo instead of verbose console')
     a = ap.parse_args()
