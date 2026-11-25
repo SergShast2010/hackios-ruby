@@ -44,9 +44,9 @@ syscall3_err(long num, long a, long b, long c)
 	long err = 0;
 	__asm__ volatile (
 		"svc #0x80\n"
-		"cset %1, cs\n"
-		: "+r" (x0), "=r" (err)
-		: "r" (x16), "r" (x1), "r" (x2)
+		"cset %2, cs\n"
+		: "+r" (x0), "+r" (x1), "=r" (err)
+		: "r" (x16), "r" (x2)
 		: "memory", "cc"
 	);
 	return err ? -x0 : x0;
@@ -65,32 +65,62 @@ syscall6_err(long num, long a, long b, long c, long d, long e, long f)
 	long err = 0;
 	__asm__ volatile (
 		"svc #0x80\n"
-		"cset %1, cs\n"
-		: "+r" (x0), "=r" (err)
-		: "r" (x16), "r" (x1), "r" (x2), "r" (x3), "r" (x4), "r" (x5)
+		"cset %2, cs\n"
+		: "+r" (x0), "+r" (x1), "=r" (err)
+		: "r" (x16), "r" (x2), "r" (x3), "r" (x4), "r" (x5)
 		: "memory", "cc"
 	);
 	return err ? -x0 : x0;
 }
 
 #define SYS_exit            1
+#define SYS_fork            2
 #define SYS_read            3
 #define SYS_write           4
 #define SYS_open            5
 #define SYS_close           6
+#define SYS_wait4           7
 #define SYS_getpid          20
 #define SYS_getuid          24
 #define SYS_accept          30
+#define SYS_execve          59
+#define SYS_dup2            90
 #define SYS_fcntl           92
 #define SYS_select          93
+#define SYS_fsync           95
 #define SYS_socket          97
 #define SYS_bind            104
 #define SYS_setsockopt      105
 #define SYS_listen          106
 #define SYS_gettimeofday    116
 #define SYS_shutdown        134
+#define SYS_unmount         159
+#define SYS_mount           167
+#define SYS_lseek           199
 #define SYS_sysctlbyname    274
 #define SYS_getdirentries64 344
+
+#define MNT_RDONLY          0x00000001
+#define SEEK_SET            0
+
+/* Darwin arm64 fork: returns pid in parent (x1==0), 0 in child (x1!=0), -errno on carry */
+static long
+sys_fork(void)
+{
+	register long x16 __asm__("x16") = SYS_fork;
+	register long x0 __asm__("x0") = 0;
+	register long x1 __asm__("x1") = 0;
+	long err = 0;
+	__asm__ volatile (
+		"svc #0x80\n"
+		"cset %2, cs\n"
+		: "+r" (x0), "+r" (x1), "=r" (err)
+		: "r" (x16)
+		: "memory", "cc"
+	);
+	if (err) return -x0;
+	return x1 ? 0 : x0;
+}
 
 #define O_RDONLY            0x0000
 #define O_RDWR              0x0002
@@ -740,6 +770,289 @@ cmd_touch(int out, const char *arg)
 	put(out, "\n");
 }
 
+static void
+cmd_nbd(int out, const char *arg)
+{
+	while (*arg == ' ') arg++;
+	if (!*arg) {
+		show_str_sysctl(out, 0, "kern.hakios.nbd", ufs_buf, sizeof(ufs_buf));
+		return;
+	}
+	u64 nlen = slen(arg);
+	long rc = syscall6_err(SYS_sysctlbyname, (long)"kern.hakios.nbd_ctrl", 20, 0, 0, (long)arg, (long)nlen);
+	if (rc != 0) {
+		put(out, "nbd_ctrl error="); put_u64(out, (u64)(-rc)); put(out, "\n");
+	} else {
+		put(out, "nbd_ctrl OK\n");
+	}
+	show_str_sysctl(out, 0, "kern.hakios.nbd", ufs_buf, sizeof(ufs_buf));
+}
+
+static void
+cmd_mount_apfs(int out, const char *arg)
+{
+	char dev[128], dir[128];
+	while (*arg == ' ') arg++;
+	u64 di = 0;
+	while (*arg && *arg != ' ' && di + 1 < sizeof(dev)) dev[di++] = *arg++;
+	dev[di] = 0;
+	while (*arg == ' ') arg++;
+	u64 mi = 0;
+	while (*arg && *arg != ' ' && mi + 1 < sizeof(dir)) dir[mi++] = *arg++;
+	dir[mi] = 0;
+	if (di == 0) {
+		put(out, "usage: mount <dev> [dir] (default dir=/mnt)\n");
+		return;
+	}
+	if (mi == 0) {
+		dir[0] = '/'; dir[1] = 'm'; dir[2] = 'n'; dir[3] = 't'; dir[4] = 0;
+	}
+	long rc = syscall6_err(SYS_mount, (long)"apfs", (long)dir, MNT_RDONLY, (long)dev, 0, 0);
+	if (rc != 0) {
+		put(out, "mount apfs "); put(out, dev); put(out, " -> "); put(out, dir);
+		put(out, " FAILED err="); put_u64(out, (u64)(-rc)); put(out, "\n");
+	} else {
+		put(out, "MOUNT OK apfs "); put(out, dev); put(out, " -> "); put(out, dir); put(out, "\n");
+	}
+}
+
+static void
+cmd_umount(int out, const char *arg)
+{
+	while (*arg == ' ') arg++;
+	if (!*arg) arg = "/mnt";
+	long rc = syscall3_err(SYS_unmount, (long)arg, 0, 0);
+	if (rc != 0) {
+		put(out, "umount "); put(out, arg); put(out, " FAILED err=");
+		put_u64(out, (u64)(-rc)); put(out, "\n");
+	} else {
+		put(out, "UMOUNT OK "); put(out, arg); put(out, "\n");
+	}
+}
+
+static void
+cmd_cat(int out, const char *path)
+{
+	while (*path == ' ') path++;
+	if (!*path) { put(out, "usage: cat <path>\n"); return; }
+	int f = (int)syscall3_err(SYS_open, (long)path, O_RDONLY, 0);
+	if (f < 0) {
+		put(out, "cat: open failed err="); put_u64(out, (u64)(-f)); put(out, "\n");
+		return;
+	}
+	u64 total = 0;
+	while (total < 4096) {
+		long n = syscall3_err(SYS_read, f, (long)io_buf, (long)(4096 - total));
+		if (n <= 0) break;
+		(void)write_all(out, io_buf, (u64)n);
+		total += (u64)n;
+	}
+	(void)syscall3_err(SYS_close, f, 0, 0);
+	if (total == 0) put(out, "\n");
+}
+
+static void
+cmd_crc(int out, const char *path)
+{
+	crc32_init();
+	while (*path == ' ') path++;
+	if (!*path) { put(out, "usage: crc <path>\n"); return; }
+	int f = (int)syscall3_err(SYS_open, (long)path, O_RDONLY, 0);
+	if (f < 0) {
+		put(out, "crc: open failed err="); put_u64(out, (u64)(-f)); put(out, "\n");
+		return;
+	}
+	u64 t0 = now_ms();
+	u64 total = 0;
+	u32 crc = 0xffffffffu;
+	int ok = 1;
+	for (;;) {
+		long n = syscall3_err(SYS_read, f, (long)io_buf, (long)sizeof(io_buf));
+		if (n > 0) {
+			crc = crc32_update(crc, io_buf, (u64)n);
+			total += (u64)n;
+		} else if (n == 0) {
+			break;
+		} else {
+			ok = 0;
+			put(out, "crc: read failed err="); put_u64(out, (u64)(-n)); put(out, "\n");
+			break;
+		}
+	}
+	(void)syscall3_err(SYS_close, f, 0, 0);
+	u64 dt = now_ms() - t0;
+	crc ^= 0xffffffffu;
+	char line[192];
+	char *p = line, *end = line + sizeof(line);
+	p = app_str(p, end, ok ? "CRC OK bytes=" : "CRC ERR bytes=");
+	p = app_u64(p, end, total);
+	p = app_str(p, end, " ms=");
+	p = app_u64(p, end, dt);
+	p = app_str(p, end, " speed=");
+	p = app_mbps(p, end, total, dt);
+	p = app_str(p, end, " MB/s crc32=0x");
+	p = app_hex32(p, end, crc);
+	p = app_str(p, end, "\n");
+	put(out, line);
+}
+
+static void
+cmd_rawbench(int out, const char *arg)
+{
+	crc32_init();
+	char dev[128];
+	while (*arg == ' ') arg++;
+	u64 di = 0;
+	while (*arg && *arg != ' ' && di + 1 < sizeof(dev)) dev[di++] = *arg++;
+	dev[di] = 0;
+	while (*arg == ' ') arg++;
+	u64 mb = *arg ? parse_u64(arg) : 8ULL;
+	if (di == 0) {
+		put(out, "usage: rawbench <dev> [mb]\n");
+		return;
+	}
+	if (mb < 1) mb = 1;
+	if (mb > 256) mb = 256;
+	int f = (int)syscall3_err(SYS_open, (long)dev, O_RDONLY, 0);
+	if (f < 0) {
+		put(out, "rawbench: open failed err="); put_u64(out, (u64)(-f)); put(out, "\n");
+		return;
+	}
+	u64 target = mb * 1024ULL * 1024ULL;
+	u64 total = 0;
+	u32 crc = 0xffffffffu;
+	u64 t0 = now_ms();
+	int ok = 1;
+	while (total < target) {
+		u64 want = target - total;
+		if (want > sizeof(io_buf)) want = sizeof(io_buf);
+		long n = syscall3_err(SYS_read, f, (long)io_buf, (long)want);
+		if (n > 0) {
+			crc = crc32_update(crc, io_buf, (u64)n);
+			total += (u64)n;
+		} else if (n == 0) {
+			break;
+		} else {
+			ok = 0;
+			put(out, "rawbench: read err="); put_u64(out, (u64)(-n)); put(out, "\n");
+			break;
+		}
+	}
+	(void)syscall3_err(SYS_close, f, 0, 0);
+	u64 dt = now_ms() - t0;
+	crc ^= 0xffffffffu;
+	char line[192];
+	char *p = line, *end = line + sizeof(line);
+	p = app_str(p, end, ok ? "RAWBENCH OK bytes=" : "RAWBENCH ERR bytes=");
+	p = app_u64(p, end, total);
+	p = app_str(p, end, " ms=");
+	p = app_u64(p, end, dt);
+	p = app_str(p, end, " speed=");
+	p = app_mbps(p, end, total, dt);
+	p = app_str(p, end, " MB/s crc32=0x");
+	p = app_hex32(p, end, crc);
+	p = app_str(p, end, "\n");
+	put(out, line);
+}
+
+static void
+cmd_rawwrite(int out, const char *arg)
+{
+	char dev[128];
+	while (*arg == ' ') arg++;
+	u64 di = 0;
+	while (*arg && *arg != ' ' && di + 1 < sizeof(dev)) dev[di++] = *arg++;
+	dev[di] = 0;
+	while (*arg == ' ') arg++;
+	u64 sec = parse_u64(arg);
+	while (*arg >= '0' && *arg <= '9') arg++;
+	while (*arg == ' ') arg++;
+	u64 tag = *arg ? parse_u64(arg) : 0x56a5ULL;
+	if (di == 0) {
+		put(out, "usage: rawwrite <dev> <sector> [tag]\n");
+		return;
+	}
+	int f = (int)syscall3_err(SYS_open, (long)dev, O_RDWR, 0);
+	if (f < 0) {
+		put(out, "rawwrite: open failed err="); put_u64(out, (u64)(-f)); put(out, "\n");
+		return;
+	}
+	u8 wbuf[512], rbuf[512];
+	for (int i = 0; i < 512; i++) {
+		wbuf[i] = (u8)(((u64)i * 37ULL + tag + sec * 13ULL) & 0xffULL);
+	}
+	s64 off = (s64)(sec * 512ULL);
+	long rc = syscall3_err(SYS_lseek, f, off, SEEK_SET);
+	if (rc < 0) {
+		put(out, "rawwrite: lseek1 err="); put_u64(out, (u64)(-rc)); put(out, "\n");
+		(void)syscall3_err(SYS_close, f, 0, 0);
+		return;
+	}
+	rc = syscall3_err(SYS_write, f, (long)wbuf, 512);
+	if (rc != 512) {
+		put(out, "rawwrite: write err="); put_u64(out, (u64)(rc < 0 ? -rc : rc)); put(out, "\n");
+		(void)syscall3_err(SYS_close, f, 0, 0);
+		return;
+	}
+	(void)syscall3_err(SYS_fsync, f, 0, 0);
+	rc = syscall3_err(SYS_lseek, f, off, SEEK_SET);
+	if (rc < 0) {
+		put(out, "rawwrite: lseek2 err="); put_u64(out, (u64)(-rc)); put(out, "\n");
+		(void)syscall3_err(SYS_close, f, 0, 0);
+		return;
+	}
+	memset(rbuf, 0, sizeof(rbuf));
+	rc = syscall3_err(SYS_read, f, (long)rbuf, 512);
+	(void)syscall3_err(SYS_close, f, 0, 0);
+	if (rc != 512) {
+		put(out, "rawwrite: readback err="); put_u64(out, (u64)(rc < 0 ? -rc : rc)); put(out, "\n");
+		return;
+	}
+	int diff = 0;
+	for (int i = 0; i < 512; i++) {
+		if (wbuf[i] != rbuf[i]) { diff = 1; break; }
+	}
+	if (diff) {
+		put(out, "RAWWRITE MISMATCH\n");
+	} else {
+		put(out, "RAWWRITE OK sector="); put_u64(out, sec);
+		put(out, " tag="); put_u64(out, tag); put(out, " (512B verified)\n");
+	}
+}
+
+static void
+cmd_run(int out, const char *path)
+{
+	while (*path == ' ') path++;
+	if (!*path) { put(out, "usage: run <path>\n"); return; }
+	long pid = sys_fork();
+	if (pid < 0) {
+		put(out, "run: fork failed err="); put_u64(out, (u64)(-pid)); put(out, "\n");
+		return;
+	}
+	if (pid == 0) {
+		/* Child: redirect stdout/stderr to the TCP console socket */
+		(void)syscall3_err(SYS_dup2, out, 1, 0);
+		(void)syscall3_err(SYS_dup2, out, 2, 0);
+		const char *argv[2] = { path, 0 };
+		const char *envp[1] = { 0 };
+		long rc = syscall3_err(SYS_execve, (long)path, (long)argv, (long)envp);
+		put(1, "run: execve failed err="); put_u64(1, (u64)(-rc)); put(1, "\n");
+		(void)syscall3_err(SYS_exit, 127, 0, 0);
+		for (;;) {}
+	}
+	int status = 0;
+	long wr = syscall6_err(SYS_wait4, pid, (long)&status, 0, 0, 0, 0);
+	if (wr < 0) {
+		put(out, "run: wait4 failed err="); put_u64(out, (u64)(-wr)); put(out, "\n");
+		return;
+	}
+	put(out, "RUN EXIT pid="); put_u64(out, (u64)pid);
+	put(out, " code="); put_u64(out, (u64)((status >> 8) & 0xff));
+	put(out, " sig="); put_u64(out, (u64)(status & 0x7f));
+	put(out, "\n");
+}
+
 /* Returns: 0 = continue, 1 = close client, 2 = return to UEFI */
 static int
 exec_console_cmd(int out, char *line)
@@ -760,6 +1073,14 @@ exec_console_cmd(int out, char *line)
 		    "  mem             - live XNU memory breakdown (kern.hakios_memory)\n"
 		    "  usb             - live MT6877 USB MTU3/QMU/ECM counters\n"
 		    "  ufs             - read-only LUN2 GPT partition table\n"
+    "  nbd [cmd ...]   - NBD status or connect/disconnect/auto\n"
+    "  mount <d> [dir] - mount APFS device read-only (default /mnt)\n"
+    "  umount [dir]    - unmount filesystem (default /mnt)\n"
+    "  cat <path>      - print file contents (up to 4 KiB)\n"
+    "  crc <path>      - stream file and verify IEEE CRC-32 + MB/s\n"
+    "  run <path>      - fork+execve Mach-O binary from filesystem\n"
+    "  rawbench <d>[M] - raw sequential block read + CRC32 + MB/s\n"
+    "  rawwrite <d><s> - RW+fsync+verify 512B sector on RW NBD unit\n"
 		    "  dmesg [bytes]   - tail of kernel log (default 8192, max 65535)\n"
 		    "  ls [path]       - list directory (default /dev)\n"
 		    "  sysctl <name>   - read any sysctl value\n"
@@ -786,6 +1107,26 @@ exec_console_cmd(int out, char *line)
 		show_str_sysctl(out, 0, "kern.hakios.usb_stats", ufs_buf, sizeof(ufs_buf));
 	} else if (streq(line, "ufs")) {
 		show_str_sysctl(out, 0, "kern.hakios.ufs_parts", ufs_buf, sizeof(ufs_buf));
+	} else if (streq(line, "nbd")) {
+		cmd_nbd(out, "");
+	} else if (strstarts(line, "nbd ")) {
+		cmd_nbd(out, line + 4);
+	} else if (strstarts(line, "mount ")) {
+		cmd_mount_apfs(out, line + 6);
+	} else if (streq(line, "umount")) {
+		cmd_umount(out, "/mnt");
+	} else if (strstarts(line, "umount ")) {
+		cmd_umount(out, line + 7);
+	} else if (strstarts(line, "cat ")) {
+		cmd_cat(out, line + 4);
+	} else if (strstarts(line, "crc ")) {
+		cmd_crc(out, line + 4);
+	} else if (strstarts(line, "run ")) {
+		cmd_run(out, line + 4);
+	} else if (strstarts(line, "rawbench ")) {
+		cmd_rawbench(out, line + 9);
+	} else if (strstarts(line, "rawwrite ")) {
+		cmd_rawwrite(out, line + 9);
 	} else if (streq(line, "dmesg") || strstarts(line, "dmesg ")) {
 		u64 want = 8192ULL;
 		if (line[5] == ' ') {
@@ -949,6 +1290,7 @@ run_tcp_services(int con_out, long hold_s)
 
 	/* Emit final USB stats into console log before exiting to UEFI summary */
 	show_str_sysctl(con_out, 0, "kern.hakios.usb_stats", ufs_buf, sizeof(ufs_buf));
+	show_str_sysctl(con_out, 0, "kern.hakios.nbd", ufs_buf, sizeof(ufs_buf));
 }
 
 void

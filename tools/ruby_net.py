@@ -129,6 +129,67 @@ def run_txbench(host: str, port: int, mb: int, timeout: float = 60.0) -> bool:
     return ok
 
 
+
+def run_nbdtest(host: str, port: int, rw_unit: bool = True) -> bool:
+    """Full end-to-end verification of HNBD v1 + APFS mount + decmpfs + 8 MiB CRC32 + Mach-O execve + RW."""
+    expected_comp_crc = "0x7e8b97b5"
+    expected_big_crc = "0x344c2cb9"
+
+    def step(cmd: str) -> str:
+        out = run_cmd(host, port, cmd, timeout=30.0)
+        print(f"=== {cmd} ===\n{out.rstrip()}\n", flush=True)
+        return out
+
+    st = ""
+    for _ in range(16):
+        st = run_cmd(host, port, "nbd", timeout=10.0)
+        if "nbd0: connected" in st:
+            break
+        time.sleep(0.5)
+    if "nbd0: connected" not in st:
+        st = step("nbd connect 0")
+    else:
+        print(f"=== nbd ===\n{st.rstrip()}\n", flush=True)
+    if "nbd0: connected" not in st:
+        print("FAIL: nbd0 not connected")
+        return False
+
+    ok = True
+    out = step("mount /dev/nbd0 /mnt")
+    ok &= ("MOUNT OK" in out)
+
+    out = step("ls /mnt")
+    ok &= ("etc" in out and "data" in out and "bin" in out)
+
+    out = step("cat /mnt/etc/hello.txt")
+    ok &= ("HakiOS v0.56 Network APFS Volume" in out)
+
+    out = step("crc /mnt/data/compressed.txt")
+    ok &= ("CRC OK" in out and expected_comp_crc in out)
+
+    out = step("crc /mnt/data/test8m.bin")
+    ok &= ("CRC OK" in out and expected_big_crc in out)
+
+    out = step("run /mnt/bin/apfs_hello")
+    ok &= ("APFS_EXEC_OK" in out and "code=42" in out)
+
+    out = step("umount /mnt")
+    ok &= ("UMOUNT OK" in out)
+
+    if rw_unit:
+        out = step("nbd connect 1")
+        if "nbd1: connected" in out and " rw" in out:
+            out = step("rawwrite /dev/rnbd1 7 12345")
+            ok &= ("RAWWRITE OK" in out)
+            step("nbd disconnect 1")
+        else:
+            print("NOTE: unit1 RW not served, skipping rawwrite")
+
+    step("nbd")
+    print(f"NBD+APFS E2E VERIFY: {'PASS (ALL CHECKS BIT-EXACT)' if ok else 'FAIL!'}")
+    return ok
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="HakiOS ruby TCP console & USB DMA benchmark client")
     ap.add_argument("--host", default="192.168.7.2", help="Target IP (default 192.168.7.2)")
@@ -144,6 +205,8 @@ def main() -> int:
     p_rx.add_argument("--mb", type=int, default=16)
     p_tx = sub.add_parser("txbench", help="Run TX (phone -> host) benchmark only")
     p_tx.add_argument("--mb", type=int, default=16)
+    p_nbd = sub.add_parser("nbdtest", help="Run full NBD + APFS + CRC32 + Mach-O execve + RW test")
+    p_nbd.add_argument("--no-rw", action="store_true", help="Skip unit1 RW sector test")
 
     a = ap.parse_args()
     if a.mode == "shell":
@@ -156,6 +219,8 @@ def main() -> int:
         return 0 if run_rxbench(a.host, 2325, a.mb) else 1
     if a.mode == "txbench":
         return 0 if run_txbench(a.host, 2324, a.mb) else 1
+    if a.mode == "nbdtest":
+        return 0 if run_nbdtest(a.host, a.port, rw_unit=not a.no_rw) else 1
     if a.mode == "bench":
         ok1 = run_rxbench(a.host, 2325, a.mb)
         ok2 = run_txbench(a.host, 2324, a.mb)
