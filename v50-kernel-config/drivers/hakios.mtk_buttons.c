@@ -25,6 +25,7 @@ extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 extern kern_return_t kernel_thread_start(thread_continue_t, void *, thread_t *);
 extern void thread_deallocate(thread_t);
 extern void loader_return(void);
+extern void hakios_mtk_usb_ecm_log_stats(void) __attribute__((weak));
 
 #define RK_KPD_PA          0x10010000UL
 #define RK_KPD_MEM1        0x0004u
@@ -163,6 +164,7 @@ rk_thread(__unused void *arg, __unused wait_result_t result)
 		if (rk_keys[1].down && rk_keys[2].down) {
 			if (++rk_combo_ticks == RK_COMBO_TICKS) {
 				printf("mtk_buttons: VolUp+VolDown hold -> loader_return\n");
+				if (hakios_mtk_usb_ecm_log_stats) hakios_mtk_usb_ecm_log_stats();
 				loader_return();
 				return;
 			}

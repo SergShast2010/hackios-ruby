@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build Mu-ruby v0.51: source-built HakiOS XNU (MT6877, 8-core SMP + full RAM) + userland/hello."""
+"""Build Mu-ruby v0.55f: source-built HakiOS XNU (MT6877, 4 GiB RAM, 8-core SMP, RO-UFS, USB CDC-ECM) + PID 1."""
 import argparse
 import hashlib
 import json
@@ -100,7 +100,7 @@ def build(out: Path, kernel: Path, ramdisk: Path, cmdline: str, kver: str, pack_
 
 
 if __name__ == '__main__':
-    ap = argparse.ArgumentParser(description='Build Mu-ruby v0.50 with source-built XNU + hello')
+    ap = argparse.ArgumentParser(description='Build Mu-ruby v0.55f with source-built XNU + TCP console PID 1')
     ap.add_argument('--out', type=Path, default=V50_OUT)
     ap.add_argument('--kernel', type=Path, default=DEFAULT_KERNEL)
     ap.add_argument('--ramdisk', type=Path, default=DEFAULT_RAMDISK)
