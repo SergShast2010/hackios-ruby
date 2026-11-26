@@ -1,5 +1,5 @@
 diff --git a/userland/build.sh b/userland/build.sh
-index c604123..287ad1d 100755
+index c604123..a051f61 100755
 --- a/userland/build.sh
 +++ b/userland/build.sh
 @@ -109,7 +109,7 @@ DARWIN_JOBS=${JOBS-"
@@ -11,7 +11,16 @@ index c604123..287ad1d 100755
  	com.apple.iconservices.iconservicesagent com.apple.pluginkit.pkd
  	com.apple.SpringBoard
  "}
-@@ -582,7 +582,7 @@ python3 ../tools/apfs/mkapfs.py -z --plain fw -o root.apfs redwood=root | tail -
+@@ -168,6 +168,8 @@ cp obj/child root/bin/child
+ # ends: the program and its job together, away from the Darwin job list below, which several working
+ # copies are editing at once.
+ [ -f obj/var_store ] && cp obj/var_store root/bin/
++[ -f obj/rwtouch ] && cp obj/rwtouch root/bin/
++[ -f obj/ruby_ctld ] && cp obj/ruby_ctld root/bin/
+ cp com.hakios.varstore.plist root/LaunchDaemons/
+ echo "Darwin on hakios: image built $(date '+%Y-%m-%d %H:%M')" > root/etc/motd
+ # 300000 bytes, byte i = (i*31 + (i>>8)) & 0xff; init verifies it through read() and mmap()
+@@ -582,7 +584,7 @@ python3 ../tools/apfs/mkapfs.py -z --plain fw -o root.apfs redwood=root | tail -
  # CRYPTEXES=flash: the boot volume alone (20 MB) -- the cryptexes are Apple's images as they are on the
  # flash, in darwin right after the Darwin volume (../tools/darwin-write.py put them there), and init mounts
  # them from there, the same containers 1 and 2 of the root's own device.
@@ -20,7 +29,22 @@ index c604123..287ad1d 100755
  	rm -rf flashboot flashboot.os
  	mkdir -p flashboot/sbin flashboot/redwood flashboot/dev flashboot/flash flashboot/Cryptexes/OS flashboot/Cryptexes/App
  	cp obj/stage0 flashboot/sbin/launchd
-@@ -624,7 +624,7 @@ if [ -n "$FLASHBOOT" ] && [ -f $CACHE/dyld_shared_cache_arm64 ]; then
+@@ -614,7 +616,13 @@ if [ -n "$FLASHBOOT" ] && [ -f $CACHE/dyld_shared_cache_arm64 ]; then
+ 	# the package manager's prefix, when tools/mk-jb.sh has fetched one: /jb of the boot volume, which is
+ 	# /private/preboot/jb once the Darwin volume is the root -- the volume where a rootless jailbreak keeps its
+ 	# Procursus on an iPhone as well; init grafts it onto /var/jb (src/init.c, mount_writable)
+-	if [ -d ../jb/root/var/jb ]; then
++	if [ -n "$JB_NBD" ]; then
++		mkdir -p flashboot/jb flashboot/jb-rw flashboot/jb-bin
++		for c in $SILEO_BIN; do
++			ln -s /var/jb/usr/bin/$c flashboot/jb-bin/$c
++		done
++		echo "  the package manager's prefix: external (jb_apfs=nbd3 -> /private/preboot/jb)"
++	elif [ -d ../jb/root/var/jb ]; then
+ 		cp -a ../jb/root/var/jb flashboot/jb
+ 		mkdir -p flashboot/jb-rw        # where init mounts the prefix's writable copy (src/init.c)
+ 		# and what Sileo runs from /bin, for init to put over the Darwin volume's /bin (see the system image below)
+@@ -624,7 +632,7 @@ if [ -n "$FLASHBOOT" ] && [ -f $CACHE/dyld_shared_cache_arm64 ]; then
  		done
  		echo "  the package manager's prefix: $(du -sh flashboot/jb | cut -f1) as /jb of the boot volume"
  	fi
@@ -30,7 +54,7 @@ index c604123..287ad1d 100755
  	# the third container: Apple's App cryptex as it is (10 MB; unpack.sh), for the boot volume's Cryptexes/App
  	APP=""
 diff --git a/userland/src/init.c b/userland/src/init.c
-index 6801ce2..4792306 100644
+index 6801ce2..beee07c 100644
 --- a/userland/src/init.c
 +++ b/userland/src/init.c
 @@ -184,9 +184,16 @@ flash_root(const char *dev)
@@ -53,12 +77,147 @@ index 6801ce2..4792306 100644
  	}
  	check(ok, "mount the Darwin volume read only");
  	if (!ok) {
+@@ -266,6 +273,24 @@ flash_root(const char *dev)
+ 	 */
+ 	mount_cryptex("OS", ",c=1", devpath);
+ 	mount_cryptex("App", ",c=2", devpath);
++	{
++		const char *jb_dev = boot_arg("jb_apfs");
++		if (jb_dev && jb_dev[0]) {
++			char jbpath[64];
++			int jbok = 0;
++			struct { char *fspec; } jba = { jbpath };
++			strcpy(jbpath, "/dev/");
++			strcpy(jbpath + 5, jb_dev);
++			for (int a = 0; a < 10; a++) {
++				if (mount("apfs", "/private/preboot/jb", MNT_RDONLY, &jba) == 0) {
++					jbok = 1;
++					break;
++				}
++				usleep(200000);
++			}
++			printf("  jb_apfs %s on /private/preboot/jb: %s\n", jbpath, jbok ? "ok" : strerror(errno));
++		}
++	}
+ 	check(bind_dir("/private/preboot/redwood", "/redwood"), "this image back on /redwood");
+ 	flash_root_mode = 1;
+ }
+@@ -852,12 +877,53 @@ mount_data_volume(void)
+ 	strcpy(dev + 5, name);
+ 	memset(&args, 0, sizeof(args));
+ 	args.fspec = dev;
+-	if (mount("hfs", "/private/var", 0, &args) != 0) {
+-		printf("  HFS Plus from %s: %s; a memory filesystem instead, empty at every boot\n", dev, strerror(errno));
+-		return 0;
++	for (int attempt = 0; attempt < 10; attempt++) {
++		if (mount("hfs", "/private/var", 0, &args) == 0) {
++			printf("  /private/var: HFS Plus from %s, kept between boots\n", dev);
++			return 1;
++		}
++		if (attempt == 0 && (errno == 22 /* EINVAL */ || errno == 5 /* EIO */)) {
++			/* If the backing device is completely zeroed in its first 4 KiB, initialize HFSX journaled once. */
++			char rdev[64];
++			strcpy(rdev, "/dev/r");
++			strcpy(rdev + 6, name);
++			int rfd = open(rdev, O_RDONLY, 0);
++			if (rfd >= 0) {
++				unsigned char hdr[4096];
++				ssize_t got = pread(rfd, hdr, sizeof(hdr), 0);
++				close(rfd);
++				int blank = (got == (ssize_t)sizeof(hdr));
++				for (ssize_t i = 0; blank && i < got; i++) {
++					if (hdr[i] != 0) blank = 0;
++				}
++				if (blank) {
++					printf("  /private/var: %s is blank, formatting HFSX journaled...\n", rdev);
++					char *nf_argv[] = { "/sbin/newfs_hfs", "-s", "-J", "-b", "4096", "-v", "Data", rdev, NULL };
++					char *nf_envp[] = { "PATH=/sbin:/bin:/usr/sbin:/usr/bin", NULL };
++					int st_nf = 0;
++					pid_t pid = fork();
++					if (pid == 0) {
++						execve(nf_argv[0], nf_argv, nf_envp);
++						_exit(127);
++					}
++					if (pid > 0 && wait4(pid, &st_nf, 0, NULL) == pid && st_nf == 0) {
++						if (mount("hfs", "/private/var", 0, &args) == 0) {
++							chmod("/private/var", 0755);
++							printf("  /private/var: formatted and mounted HFS Plus from %s\n", dev);
++							return 1;
++						}
++					}
++				}
++			}
++		}
++		if (errno == 2 /* ENOENT */ || errno == 6 /* ENXIO */ || errno == 19 /* ENODEV */) {
++			usleep(200000);
++			continue;
++		}
++		break;
+ 	}
+-	printf("  /private/var: HFS Plus from %s, kept between boots\n", dev);
+-	return 1;
++	printf("  HFS Plus from %s: %s; a memory filesystem instead, empty at every boot\n", dev, strerror(errno));
++	return 0;
+ }
+ 
+ /* What is under PATH, gone; PATH itself stays (a kept volume's tmp, run and vm are each boot's own) */
+@@ -919,6 +985,8 @@ mount_writable(void)
+ 		for (unsigned i = 0; i < sizeof(own) / sizeof(own[0]); i++) {
+ 			empty_tree(own[i], 0);
+ 		}
++		/* Clear cached MobileGestalt display properties so fbscale/fbsubtype changes take effect cleanly. */
++		unlink("/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches/com.apple.MobileGestalt.plist");
+ 		ok = 1;
+ 		check(ok, "mount the data volume on /private/var");
+ 	} else {
+@@ -985,8 +1053,8 @@ mount_writable(void)
+ 	 * -- the boot volume, where a rootless jailbreak on an iPhone keeps its Procursus too
+ 	 * (/var/jb leads into /private/preboot there)
+ 	 */
+-	jb = stat("/jb", &st) == 0 && (st.st_mode & S_IFMT) == S_IFDIR ? "/jb" :
+-	    stat("/private/preboot/jb", &st) == 0 && (st.st_mode & S_IFMT) == S_IFDIR ? "/private/preboot/jb" : NULL;
++	jb = stat("/jb/usr", &st) == 0 && (st.st_mode & S_IFMT) == S_IFDIR ? "/jb" :
++	    stat("/private/preboot/jb/usr", &st) == 0 && (st.st_mode & S_IFMT) == S_IFDIR ? "/private/preboot/jb" : NULL;
+ 	if (ok && jb != NULL) {
+ 		const char *to = "/private/var/jb";
+ 		int dirs = 0, entries = 0, grafted, users = 0;
 diff --git a/userland/src/stage0.c b/userland/src/stage0.c
-index 3f04cc9..50619e1 100644
+index 3f04cc9..4e2af38 100644
 --- a/userland/src/stage0.c
 +++ b/userland/src/stage0.c
-@@ -24,8 +24,25 @@ main(int argc, char **argv, char **envp)
- 		close(fd);
+@@ -5,31 +5,68 @@
+  * and a half to upload to the phone, so nothing that changes often lives in
+  * it. All of that - the real init, its tests, the list of launchd jobs - is
+  * in the small image that travels with the kernel (the second RAM disk,
+- * /dev/md1), an APFS container (tools/apfs/mkapfs.py). This program
+- * mounts it on /redwood and hands over.
++ * /dev/md1, or /dev/nbd1 over USB ECM NBD), an APFS container (tools/apfs/mkapfs.py).
++ * This program mounts it on /redwood and hands over.
+  */
+ #include "mini.h"
+ 
++#define ERR_ENXIO    6
++#define ERR_ENETDOWN 50
++
+ int
+ main(int argc, char **argv, char **envp)
+ {
+ 	char *init_argv[] = { "/redwood/sbin/init", NULL };
+ 	int fd = open("/dev/console", O_RDWR, 0);
+-
+-	(void)argc, (void)argv;
+-	dup2(fd, 0);
+-	dup2(fd, 1);
+-	dup2(fd, 2);
+-	if (fd > 2) {
+-		close(fd);
++	if (fd >= 0) {
++		dup2(fd, 0);
++		dup2(fd, 1);
++		dup2(fd, 2);
++		if (fd > 2) {
++			close(fd);
++		}
  	}
  
 -	if (mount("apfs", "/redwood", MNT_RDONLY, (void *)"/dev/md1") != 0) {
@@ -66,22 +225,47 @@ index 3f04cc9..50619e1 100644
 +	int mounted = 0;
 +	if (mount("apfs", "/redwood", MNT_RDONLY, (void *)"/dev/md1") == 0) {
 +		mounted = 1;
-+	} else {
-+		printf("stage0: /dev/md1 unavailable (%s), waiting for /dev/nbd1...\n", strerror(errno));
-+		for (int attempt = 1; attempt <= 240; attempt++) {
+ 	} else {
+-		execve(init_argv[0], init_argv, envp);
+-		printf("stage0: cannot run %s: %s\n", init_argv[0], strerror(errno));
++		printf("stage0: waiting for USB ECM + NBD (/dev/nbd1 -> 192.168.7.1:10809)...\n");
++		printf("stage0: run ruby_usb_auto.ps1 + ruby_nbd.py --darwin --auto-net (VolUp+VolDown 1.5s = return)\n");
++		int last_err = 0;
++		int elapsed_ms = 0;
++		int next_report_ms = 15000;
++		/* Wait patiently up to 15 minutes so USB attach / host startup is never a race. */
++		for (int attempt = 1; elapsed_ms < 900000; attempt++) {
 +			if (mount("apfs", "/redwood", MNT_RDONLY, (void *)"/dev/nbd1") == 0) {
-+				printf("stage0: mounted /dev/nbd1 on /redwood (attempt %d)\n", attempt);
++				printf("stage0: mounted /dev/nbd1 on /redwood (attempt %d, %ds)\n",
++				    attempt, elapsed_ms / 1000);
 +				mounted = 1;
 +				break;
 +			}
-+			if (attempt == 1 || (attempt % 10) == 0) {
-+				printf("stage0: /dev/nbd1 attempt %d: %s\n", attempt, strerror(errno));
++			int e = errno;
++			if (e != last_err && e != ERR_ENETDOWN && e != ERR_ENXIO) {
++				printf("stage0: /dev/nbd1 waiting (%s)\n", strerror(e));
++				last_err = e;
 +			}
-+			usleep(500000);
++			int step_ms = (e == ERR_ENETDOWN) ? 500 : 1000;
++			usleep((unsigned)step_ms * 1000u);
++			elapsed_ms += step_ms;
++			if (elapsed_ms >= next_report_ms) {
++				printf("stage0: waiting for %s (%ds)...\n",
++				    e == ERR_ENETDOWN ? "USB ECM link" : "NBD server",
++				    elapsed_ms / 1000);
++				next_report_ms += 15000;
++			}
 +		}
 +	}
 +	if (!mounted) {
-+		printf("stage0: cannot mount /dev/md1 or /dev/nbd1 on /redwood: %s\n", strerror(errno));
- 	} else {
- 		execve(init_argv[0], init_argv, envp);
- 		printf("stage0: cannot run %s: %s\n", init_argv[0], strerror(errno));
++		printf("stage0: timed out waiting for /dev/nbd1 on /redwood: %s\n", strerror(errno));
++		reboot(8); /* RB_HALT */
++		_exit(1);
+ 	}
+-	reboot(0x08 /* RB_HALT */);
+-	return 1;
++	execve(init_argv[0], init_argv, envp);
++	printf("stage0: exec %s: %s\n", init_argv[0], strerror(errno));
++	reboot(8);
++	_exit(1);
+ }

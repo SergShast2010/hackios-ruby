@@ -118,6 +118,7 @@ static struct {
 	const char *state;
 	const char *pram_state;
 	uint32_t pram_fail_off;
+	uint32_t pram_ms;
 	uint32_t i2c_di;
 	uint8_t ldo_init[4];    /* en3, v3, en2, v2 */
 	uint8_t ldo_final[4];   /* en3, v3, en2, v2 */
@@ -147,7 +148,7 @@ sysctl_mtk_touch(__unused struct sysctl_oid *oidp, __unused void *arg1,
 	const char *chip_name = (gt.chip == CHIP_FTS) ? "FT3680" :
 	    (gt.chip == CHIP_GOODIX) ? "GT9916R" : "none";
 	int n = snprintf(out, sizeof(out),
-	    "started=%d chip=%s state=%s pram=%s(fail_off=%u)\n"
+	    "started=%d chip=%s state=%s pram=%s(ms=%u,fail_off=%u)\n"
 	    "i2c_di=0x%x ldo_init=en3:%02x/v3:%02x/en2:%02x/v2:%02x "
 	    "ldo_final=en3:%02x/v3:%02x/en2:%02x/v2:%02x\n"
 	    "fts id=%02x%02x fw=%02x boot=%02x%02x "
@@ -155,7 +156,7 @@ sysctl_mtk_touch(__unused struct sysctl_oid *oidp, __unused void *arg1,
 	    "polls=%llu ok=%llu eagain=%llu eio=%llu touches=%llu active=0x%x "
 	    "last_xy=%u,%u last_hdr=%02x %02x %02x %02x\n",
 	    gt.started ? 1 : 0, chip_name, gt.state ? gt.state : "?",
-	    gt.pram_state ? gt.pram_state : "?", gt.pram_fail_off,
+	    gt.pram_state ? gt.pram_state : "?", gt.pram_ms, gt.pram_fail_off,
 	    gt.i2c_di,
 	    gt.ldo_init[0], gt.ldo_init[1], gt.ldo_init[2], gt.ldo_init[3],
 	    gt.ldo_final[0], gt.ldo_final[1], gt.ldo_final[2], gt.ldo_final[3],
@@ -556,16 +557,19 @@ fts_wait_runtime_id(int max_attempts, uint32_t step_ms, uint8_t *id_h, uint8_t *
 		uint8_t h = 0, l = 0;
 		bool ok_h = fts_read(FTS_REG_CHIP_ID_H, &h, 1);
 		bool ok_l = fts_read(FTS_REG_CHIP_ID_L, &l, 1);
-		if (ok_h && ok_l &&
-		    !(h == 0x00u && l == 0x00u) &&
-		    !(h == 0xffu && l == 0xffu)) {
+		if (ok_h) {
+			gt.fts_id_h = h;
+			*id_h = h;
+		}
+		if (ok_l) {
+			gt.fts_id_l = l;
+			*id_l = l;
+		}
+		/* FT3680/FT3658 runtime chip ID is 0x5662/0x5652; in Boot ROM it answers 0xEF/0xEF. */
+		if (ok_h && ok_l && h == 0x56u && (l == 0x62u || l == 0x52u)) {
 			uint8_t v = 0;
 			(void)fts_read(FTS_REG_FW_VER, &v, 1);
-			*id_h = h;
-			*id_l = l;
 			*fw = v;
-			gt.fts_id_h = h;
-			gt.fts_id_l = l;
 			gt.fts_fw = v;
 			return true;
 		}
@@ -589,7 +593,7 @@ fts_enter_boot_rom(uint8_t boot_id[2])
 			if (fts_read(FTS_CMD_READ_BOOTID, boot_id, 2)) {
 				gt.fts_boot_id[0] = boot_id[0];
 				gt.fts_boot_id[1] = boot_id[1];
-				if (boot_id[0] == 0x56u && boot_id[1] == 0x62u) {
+				if (boot_id[0] == 0x56u && (boot_id[1] == 0x62u || boot_id[1] == 0x52u)) {
 					return true;
 				}
 			}
@@ -629,7 +633,7 @@ fts_probe(uint8_t en3, uint8_t en2)
 	uint8_t boot_id[2] = { 0, 0 };
 
 	/* 1. Firmware in flash boots automatically within ~200 ms after reset. */
-	if (fts_wait_runtime_id(5, 80, &id_h, &id_l, &fw)) {
+	if (fts_wait_runtime_id(3, 60, &id_h, &id_l, &fw)) {
 		printf("mtk_touch: detected FocalTech FT3680 (id=0x%02x%02x fw=0x%02x) 1080x2400 rails=%02x/%02x\n",
 		    id_h, id_l, fw, en3, en2);
 		gt.chip = CHIP_FTS;
@@ -657,24 +661,31 @@ fts_probe(uint8_t en3, uint8_t en2)
 		    (unsigned)FOCALTECH_FW_LENGTH);
 		if (!fts_enter_boot_rom(boot_id)) {
 			gt.pram_state = "enter_fail";
-		} else if (!fts_write_pram(focaltech_fw, FOCALTECH_FW_LENGTH)) {
-			printf("mtk_touch: PRAM upload failed at offset %u\n", gt.pram_fail_off);
-			gt.pram_state = "write_fail";
-		} else if (!fts_write(FTS_CMD_START_APP, NULL, 0)) {
-			printf("mtk_touch: PRAM START_APP failed\n");
-			gt.pram_state = "start_fail";
 		} else {
-			gt_wait(300);
-			if (fts_wait_runtime_id(5, 200, &id_h, &id_l, &fw)) {
-				printf("mtk_touch: detected FocalTech FT3680 via PRAM (id=0x%02x%02x fw=0x%02x) rails=%02x/%02x\n",
-				    id_h, id_l, fw, en3, en2);
-				gt.chip = CHIP_FTS;
-				gt.state = "fts_pram_ok";
-				gt.pram_state = "ok";
-				return true;
+			uint64_t t0 = mach_absolute_time();
+			bool w_ok = fts_write_pram(focaltech_fw, FOCALTECH_FW_LENGTH);
+			uint64_t ns = 0;
+			absolutetime_to_nanoseconds(mach_absolute_time() - t0, &ns);
+			gt.pram_ms = (uint32_t)(ns / 1000000ULL);
+			if (!w_ok) {
+				printf("mtk_touch: PRAM upload failed at offset %u (%u ms)\n", gt.pram_fail_off, gt.pram_ms);
+				gt.pram_state = "write_fail";
+			} else if (!fts_write(FTS_CMD_START_APP, NULL, 0)) {
+				printf("mtk_touch: PRAM START_APP failed (%u ms)\n", gt.pram_ms);
+				gt.pram_state = "start_fail";
+			} else {
+				gt_wait(300);
+				if (fts_wait_runtime_id(5, 200, &id_h, &id_l, &fw)) {
+					printf("mtk_touch: detected FocalTech FT3680 via PRAM in %u ms (id=0x%02x%02x fw=0x%02x) rails=%02x/%02x\n",
+					    gt.pram_ms, id_h, id_l, fw, en3, en2);
+					gt.chip = CHIP_FTS;
+					gt.state = "fts_pram_ok";
+					gt.pram_state = "ok";
+					return true;
+				}
+				printf("mtk_touch: PRAM FW did not start after %u ms (id=%02x%02x)\n", gt.pram_ms, id_h, id_l);
+				gt.pram_state = "wait_fail";
 			}
-			printf("mtk_touch: PRAM FW did not start (id=%02x%02x)\n", id_h, id_l);
-			gt.pram_state = "wait_fail";
 		}
 	}
 
