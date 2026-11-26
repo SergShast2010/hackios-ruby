@@ -25,14 +25,17 @@ def sha256_bytes(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
 
 
-def build_v50_efi(work: Path, apple_splash: bool = False) -> Path:
+def build_v50_efi(work: Path, apple_splash: bool = False, darwin: bool = False) -> Path:
     flags = [
         'clang', '--target=aarch64-unknown-windows', '-ffreestanding', '-fno-builtin',
         '-fno-stack-protector', '-fshort-wchar', '-mgeneral-regs-only', '-mstrict-align', '-mno-stack-arg-probe',
         '-O2', '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter',
+        '-I/home/sergsh/hackios/hakios-xnu-kernel/xnuloader',
     ]
     if apple_splash:
         flags.append('-DV50_APPLE_SPLASH=1')
+    if darwin:
+        flags.append('-DV50_DARWIN=1')
     objs = []
     for name in ('v50_loader.c', 'v50_asm.S'):
         obj = work / (name + '.obj')
@@ -75,12 +78,12 @@ def build_mini_apfs_ramdisk(work: Path, hello_bin: Path) -> Path:
     return out_apfs
 
 
-def build(out: Path, kernel: Path, ramdisk: Path, cmdline: str, kver: str, pack_base: Path = PACK_BASE, apple_splash: bool = False):
+def build(out: Path, kernel: Path, ramdisk: Path, cmdline: str, kver: str, pack_base: Path = PACK_BASE, apple_splash: bool = False, darwin: bool = False, image_name: str | None = None):
     out = out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix='.v50-', dir=out) as w:
         work = Path(w)
-        efi = build_v50_efi(work, apple_splash=apple_splash)
+        efi = build_v50_efi(work, apple_splash=apple_splash, darwin=darwin)
         rd_path = ramdisk if ramdisk.suffix == ".apfs" else build_mini_apfs_ramdisk(work, ramdisk)
         payload = work / 'PAYLOAD.XNP'
         subprocess.run([
@@ -94,14 +97,18 @@ def build(out: Path, kernel: Path, ramdisk: Path, cmdline: str, kver: str, pack_
         image_bytes, report, _chunks = package_image.build(
             pack_base.read_bytes(), efi_bytes, payload=payload_bytes
         )
-        image_name = 'Mu-ruby-v0.56b-apple-splash.img' if apple_splash else V50_IMAGE
+        if image_name is None:
+            if darwin:
+                image_name = 'Mu-ruby-v0.60a-darwin-splash.img' if apple_splash else 'Mu-ruby-v0.60a-darwin.img'
+            else:
+                image_name = 'Mu-ruby-v0.56b-apple-splash.img' if apple_splash else V50_IMAGE
         img = out / image_name
         img.write_bytes(image_bytes)
         (out / 'v50_loader.efi').write_bytes(efi_bytes)
         (out / 'PAYLOAD.XNP').write_bytes(payload_bytes)
 
         manifest = {
-            'version': 'v0.56b',
+            'version': 'v0.60a' if darwin else 'v0.56b',
             'image': image_name,
             'apple_splash': apple_splash,
             'image_bytes': len(image_bytes),
@@ -138,5 +145,14 @@ if __name__ == '__main__':
     ap.add_argument('--kernel-version', default='ruby-v0.56b-mt6877')
     ap.add_argument('--pack-base', type=Path, default=PACK_BASE)
     ap.add_argument('--apple-splash', action='store_true', help='Boot with Apple splash logo instead of verbose console')
+    ap.add_argument('--darwin', action='store_true', help='Build v0.60a Darwin 16.5 NBD-boot image (flashboot.apfs + root_apfs=nbd0)')
+    ap.add_argument('--image-name', default=None, help='Override output boot image filename')
     a = ap.parse_args()
-    build(a.out, a.kernel, a.ramdisk, a.cmdline, a.kernel_version, a.pack_base, apple_splash=a.apple_splash)
+    if a.darwin:
+        if a.out == V50_OUT:
+            a.out = ROOT / 'out' / 'v60a'
+        if a.ramdisk == DEFAULT_RAMDISK:
+            a.ramdisk = Path('/home/sergsh/hackios/hakios-xnu-kernel/userland/flashboot.apfs')
+        if a.kernel_version == 'ruby-v0.56b-mt6877':
+            a.kernel_version = 'ruby-v0.60a-darwin16.5'
+    build(a.out, a.kernel, a.ramdisk, a.cmdline, a.kernel_version, a.pack_base, apple_splash=a.apple_splash, darwin=a.darwin, image_name=a.image_name)

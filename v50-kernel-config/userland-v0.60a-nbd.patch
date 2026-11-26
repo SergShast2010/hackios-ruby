@@ -1,0 +1,87 @@
+diff --git a/userland/build.sh b/userland/build.sh
+index c604123..287ad1d 100755
+--- a/userland/build.sh
++++ b/userland/build.sh
+@@ -109,7 +109,7 @@ DARWIN_JOBS=${JOBS-"
+ 	com.apple.syslogd com.apple.distnoted.xpc.daemon com.apple.diagnosticd com.apple.fseventsd
+ 	com.apple.containermanagerd com.apple.containermanagerd.system com.apple.runningboardd
+ 	com.apple.backboardd com.apple.mobile.usermanagerd com.apple.mobilegestalt.xpc com.apple.lsd
+-	com.apple.powerd com.apple.analyticsd com.apple.logd_helper
++	com.apple.powerd com.apple.logd_helper
+ 	com.apple.iconservices.iconservicesagent com.apple.pluginkit.pkd
+ 	com.apple.SpringBoard
+ "}
+@@ -582,7 +582,7 @@ python3 ../tools/apfs/mkapfs.py -z --plain fw -o root.apfs redwood=root | tail -
+ # CRYPTEXES=flash: the boot volume alone (20 MB) -- the cryptexes are Apple's images as they are on the
+ # flash, in darwin right after the Darwin volume (../tools/darwin-write.py put them there), and init mounts
+ # them from there, the same containers 1 and 2 of the root's own device.
+-if [ -n "$FLASHBOOT" ] && [ -f $CACHE/dyld_shared_cache_arm64 ]; then
++if [ -n "$FLASHBOOT" ] && { [ "$CRYPTEXES" = flash ] || [ -f $CACHE/dyld_shared_cache_arm64 ]; }; then
+ 	rm -rf flashboot flashboot.os
+ 	mkdir -p flashboot/sbin flashboot/redwood flashboot/dev flashboot/flash flashboot/Cryptexes/OS flashboot/Cryptexes/App
+ 	cp obj/stage0 flashboot/sbin/launchd
+@@ -624,7 +624,7 @@ if [ -n "$FLASHBOOT" ] && [ -f $CACHE/dyld_shared_cache_arm64 ]; then
+ 		done
+ 		echo "  the package manager's prefix: $(du -sh flashboot/jb | cut -f1) as /jb of the boot volume"
+ 	fi
+-	python3 ../tools/apfs/mkapfs.py -z --plain fw -o flashboot.boot.apfs Boot=flashboot | tail -1
++	python3 ../tools/apfs/mkapfs.py -z --plain fw --slack 8 --min-blocks 128 -o flashboot.boot.apfs Boot=flashboot | tail -1
+ 	[ -z "$CHECK" ] || ../tools/apfs/check-image.sh flashboot.boot.apfs Boot=flashboot
+ 	# the third container: Apple's App cryptex as it is (10 MB; unpack.sh), for the boot volume's Cryptexes/App
+ 	APP=""
+diff --git a/userland/src/init.c b/userland/src/init.c
+index 6801ce2..4792306 100644
+--- a/userland/src/init.c
++++ b/userland/src/init.c
+@@ -184,9 +184,16 @@ flash_root(const char *dev)
+ 
+ 	printf("\n-- the Darwin root volume on /dev/%s as the root --\n", dev);
+ 	strcpy(devpath, join("/dev/", dev, ""));
+-	ok = mount("apfs", "/flash", MNT_RDONLY, devpath) == 0;
+-	if (!ok) {
+-		printf("  mount %s: %s\n", devpath, strerror(errno));
++	ok = 0;
++	for (int attempt = 1; attempt <= 20; attempt++) {
++		if (mount("apfs", "/flash", MNT_RDONLY, devpath) == 0) {
++			ok = 1;
++			break;
++		}
++		if (attempt == 1 || (attempt % 5) == 0) {
++			printf("  mount %s attempt %d: %s\n", devpath, attempt, strerror(errno));
++		}
++		usleep(300000);
+ 	}
+ 	check(ok, "mount the Darwin volume read only");
+ 	if (!ok) {
+diff --git a/userland/src/stage0.c b/userland/src/stage0.c
+index 3f04cc9..50619e1 100644
+--- a/userland/src/stage0.c
++++ b/userland/src/stage0.c
+@@ -24,8 +24,25 @@ main(int argc, char **argv, char **envp)
+ 		close(fd);
+ 	}
+ 
+-	if (mount("apfs", "/redwood", MNT_RDONLY, (void *)"/dev/md1") != 0) {
+-		printf("stage0: cannot mount /dev/md1 on /hakios: %s\n", strerror(errno));
++	int mounted = 0;
++	if (mount("apfs", "/redwood", MNT_RDONLY, (void *)"/dev/md1") == 0) {
++		mounted = 1;
++	} else {
++		printf("stage0: /dev/md1 unavailable (%s), waiting for /dev/nbd1...\n", strerror(errno));
++		for (int attempt = 1; attempt <= 240; attempt++) {
++			if (mount("apfs", "/redwood", MNT_RDONLY, (void *)"/dev/nbd1") == 0) {
++				printf("stage0: mounted /dev/nbd1 on /redwood (attempt %d)\n", attempt);
++				mounted = 1;
++				break;
++			}
++			if (attempt == 1 || (attempt % 10) == 0) {
++				printf("stage0: /dev/nbd1 attempt %d: %s\n", attempt, strerror(errno));
++			}
++			usleep(500000);
++		}
++	}
++	if (!mounted) {
++		printf("stage0: cannot mount /dev/md1 or /dev/nbd1 on /redwood: %s\n", strerror(errno));
+ 	} else {
+ 		execve(init_argv[0], init_argv, envp);
+ 		printf("stage0: cannot run %s: %s\n", init_argv[0], strerror(errno));

@@ -213,16 +213,32 @@ def make_test_rw(out_path: Path, size_mb: int = 1) -> None:
 
 
 class UnitExport:
-    def __init__(self, unit_id: int, path: Path, writable: bool):
+    """Single-file or virtual composite (concatenated RO segments) block export."""
+
+    def __init__(self, unit_id: int, paths: list[Path], writable: bool):
+        if not paths:
+            raise ValueError(f"unit{unit_id}: empty path list")
+        if writable and len(paths) > 1:
+            raise ValueError(f"unit{unit_id}: composite export must be read-only")
         self.unit_id = unit_id
-        self.path = path
+        self.paths = paths
+        self.path = paths[0]
+        self.label = "+".join(pt.name for pt in paths)
         self.writable = writable
         flags = os.O_RDWR if writable else os.O_RDONLY
-        self.fd = os.open(str(path), flags)
-        st = os.fstat(self.fd)
-        self.size = st.st_size
-        if self.size < SECTOR_SIZE or (self.size % SECTOR_SIZE) != 0:
-            raise ValueError(f"unit{unit_id} ({path}): size {self.size} must be a non-zero multiple of 512")
+        self.segments: list[tuple[int, int, int, Path]] = []  # (start, end, fd, path)
+        off = 0
+        for pt in paths:
+            fd = os.open(str(pt), flags)
+            sz = os.fstat(fd).st_size
+            if sz < SECTOR_SIZE or (sz % SECTOR_SIZE) != 0:
+                os.close(fd)
+                self.close()
+                raise ValueError(f"unit{unit_id} ({pt}): size {sz} must be a non-zero multiple of 512")
+            self.segments.append((off, off + sz, fd, pt))
+            off += sz
+        self.size = off
+        self.fd = self.segments[0][2]
         self.lock = threading.Lock()
         self.reads = 0
         self.writes = 0
@@ -230,11 +246,41 @@ class UnitExport:
         self.rbytes = 0
         self.wbytes = 0
 
+    def pread(self, length: int, offset: int) -> bytes:
+        if len(self.segments) == 1:
+            return os.pread(self.fd, length, offset)
+        out = bytearray()
+        pos = offset
+        rem = length
+        for start, end, fd, _pt in self.segments:
+            if pos >= end:
+                continue
+            if pos < start:
+                break
+            take = min(rem, end - pos)
+            chunk = os.pread(fd, take, pos - start)
+            if len(chunk) != take:
+                return b""
+            out.extend(chunk)
+            pos += take
+            rem -= take
+            if rem == 0:
+                break
+        return bytes(out)
+
+    def pwrite(self, payload: bytes, offset: int) -> int:
+        return os.pwrite(self.fd, payload, offset)
+
+    def fsync(self) -> None:
+        if self.writable:
+            os.fsync(self.fd)
+
     def close(self):
-        try:
-            os.close(self.fd)
-        except OSError:
-            pass
+        for _start, _end, fd, _pt in getattr(self, "segments", []):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 def recv_exact(sock: socket.socket, n: int) -> bytes:
@@ -265,7 +311,7 @@ def handle_client(conn: socket.socket, addr, units: dict[int, UnitExport], quiet
         if not quiet:
             print(
                 f"[nbd] unit{unit_id} connected from {addr[0]}:{addr[1]} -> "
-                f"{u.path.name} ({u.size // (1024*1024)} MiB, {'rw' if u.writable else 'ro'})",
+                f"{u.label} ({u.size // (1024*1024)} MiB, {'rw' if u.writable else 'ro'})",
                 flush=True,
             )
 
@@ -280,7 +326,7 @@ def handle_client(conn: socket.socket, addr, units: dict[int, UnitExport], quiet
                 if length > MAX_XFER or (offset % SECTOR_SIZE) or (length % SECTOR_SIZE) or (offset + length > u.size):
                     conn.sendall(struct.pack(RSP_FMT, HNBD_RSP_MAGIC, errno.EINVAL, tag, 0))
                     continue
-                data = os.pread(u.fd, length, offset)
+                data = u.pread(length, offset)
                 if len(data) != length:
                     conn.sendall(struct.pack(RSP_FMT, HNBD_RSP_MAGIC, errno.EIO, tag, 0))
                     continue
@@ -297,7 +343,7 @@ def handle_client(conn: socket.socket, addr, units: dict[int, UnitExport], quiet
                 if length > MAX_XFER or (offset % SECTOR_SIZE) or (length % SECTOR_SIZE) or (offset + length > u.size):
                     conn.sendall(struct.pack(RSP_FMT, HNBD_RSP_MAGIC, errno.EINVAL, tag, 0))
                     continue
-                written = os.pwrite(u.fd, payload, offset)
+                written = u.pwrite(payload, offset)
                 if written != length:
                     conn.sendall(struct.pack(RSP_FMT, HNBD_RSP_MAGIC, errno.EIO, tag, 0))
                     continue
@@ -307,8 +353,7 @@ def handle_client(conn: socket.socket, addr, units: dict[int, UnitExport], quiet
                 conn.sendall(struct.pack(RSP_FMT, HNBD_RSP_MAGIC, 0, tag, 0))
 
             elif op == HNBD_OP_FLUSH:
-                if u.writable:
-                    os.fsync(u.fd)
+                u.fsync()
                 with u.lock:
                     u.flushes += 1
                 conn.sendall(struct.pack(RSP_FMT, HNBD_RSP_MAGIC, 0, tag, 0))
@@ -329,20 +374,27 @@ def handle_client(conn: socket.socket, addr, units: dict[int, UnitExport], quiet
             pass
 
 
-def parse_unit_spec(spec: str) -> tuple[Path, bool]:
+def parse_unit_spec(spec: str) -> tuple[list[Path], bool]:
+    writable = False
     if spec.endswith(":rw"):
-        return Path(spec[:-3]), True
-    if spec.endswith(":ro"):
-        return Path(spec[:-3]), False
-    return Path(spec), False
+        spec, writable = spec[:-3], True
+    elif spec.endswith(":ro"):
+        spec, writable = spec[:-3], False
+    paths = [Path(part) for part in spec.split("+") if part]
+    return paths, writable
 
 
 def main():
     ap = argparse.ArgumentParser(description="HakiOS HNBD v1 server for ruby & QEMU")
     ap.add_argument("--bind", default="0.0.0.0", help="Listen IP (default 0.0.0.0)")
     ap.add_argument("--port", type=int, default=10809, help="Listen TCP port (default 10809)")
-    ap.add_argument("--unit0", help="Image path for /dev/nbd0 (append :rw for read-write, default :ro)")
-    ap.add_argument("--unit1", help="Image path for /dev/nbd1 (append :rw for read-write, default :ro)")
+    ap.add_argument("--unit0", help="Image(s) for /dev/nbd0 (join with '+' for composite RO, append :rw for RW)")
+    ap.add_argument("--unit1", help="Image(s) for /dev/nbd1")
+    ap.add_argument("--unit2", help="Image(s) for /dev/nbd2")
+    ap.add_argument("--unit3", help="Image(s) for /dev/nbd3")
+    ap.add_argument("--darwin", action="store_true",
+                    help="Serve HakiOS Darwin 16.5 preset: unit0=rootfs+cryptex-os+cryptex-app, unit1=root.apfs")
+    ap.add_argument("--var-hfs", type=Path, help="Optional persistent HFS+ var image for /dev/nbd2 (:rw)")
     ap.add_argument("--make-test-apfs", type=Path, help="Generate deterministic test APFS image at this path")
     ap.add_argument("--test-mb", type=int, default=8, help="Payload MiB inside test APFS (default 8)")
     ap.add_argument("--make-test-rw", type=Path, help="Generate 1 MiB RW scratch disk at this path")
@@ -353,28 +405,37 @@ def main():
         make_test_apfs(args.make_test_apfs, size_mb=args.test_mb)
     if args.make_test_rw:
         make_test_rw(args.make_test_rw, size_mb=1)
-    if not args.unit0 and not args.unit1:
+
+    if args.darwin:
+        sysdir = XNU_ROOT / "sysimage"
+        if not args.unit0:
+            args.unit0 = f"{sysdir / 'rootfs.apfs'}+{sysdir / 'cryptex-os.dmg'}+{sysdir / 'cryptex-app.dmg'}:ro"
+        if not args.unit1:
+            args.unit1 = f"{XNU_ROOT / 'userland' / 'root.apfs'}:ro"
+    if args.var_hfs and not args.unit2:
+        args.unit2 = f"{args.var_hfs}:rw"
+
+    raw_units = {0: args.unit0, 1: args.unit1, 2: args.unit2, 3: args.unit3}
+    if not any(raw_units.values()):
         if args.make_test_apfs or args.make_test_rw:
             return
-        ap.error("Specify --unit0 (and/or --unit1), or --make-test-apfs")
+        ap.error("Specify --darwin or --unit0..3, or --make-test-apfs")
 
     units: dict[int, UnitExport] = {}
-    if args.unit0:
-        p, rw = parse_unit_spec(args.unit0)
-        units[0] = UnitExport(0, p, rw)
-    if args.unit1:
-        p, rw = parse_unit_spec(args.unit1)
-        units[1] = UnitExport(1, p, rw)
+    for uid, spec in raw_units.items():
+        if spec:
+            paths, rw = parse_unit_spec(spec)
+            units[uid] = UnitExport(uid, paths, rw)
 
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind((args.bind, args.port))
-    srv.listen(8)
+    srv.listen(16)
 
     print(f"[nbd] HNBD v1 listening on {args.bind}:{args.port}", flush=True)
     for uid, u in sorted(units.items()):
         print(
-            f"  unit{uid} (/dev/nbd{uid}): {u.path} "
+            f"  unit{uid} (/dev/nbd{uid}): {u.label} "
             f"({u.size} B, {u.size / (1024*1024):.2f} MiB, {'RW' if u.writable else 'RO'})",
             flush=True,
         )

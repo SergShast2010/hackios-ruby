@@ -44,7 +44,7 @@
 
 extern kern_return_t kernel_thread_start(thread_continue_t, void *, thread_t *);
 
-#define NBD_MAX_DEVS        2
+#define NBD_MAX_DEVS        4
 #define NBD_SECTOR_SIZE     512u
 #define NBD_MAX_XFER        (256u * 1024u)
 #define NBD_DEFAULT_PORT    10809u
@@ -960,7 +960,7 @@ static int
 nbd_sysctl_status(__unused struct sysctl_oid *oidp, __unused void *arg1,
     __unused int arg2, struct sysctl_req *req)
 {
-	char out[768];
+	char out[1536];
 	size_t off = 0;
 
 	if (!nbd_enabled) {

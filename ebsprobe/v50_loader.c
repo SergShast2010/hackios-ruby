@@ -8,6 +8,7 @@
 #include "Font.h"
 #include "IrqFdt.h"
 #include "v50_ram_select.h"
+#include "identity.h"
 #ifdef V50_APPLE_SPLASH
 #include "v50_apple_logo.h"
 #endif
@@ -462,6 +463,23 @@ static void build_nvram_image(unsigned char *image) {
     v50_copy(image + 16, &adler, 4);
 }
 
+static int dt_str_eq(const char *a, const char *b) {
+    while (*a && *a == *b) { a++; b++; }
+    return *a == 0 && *b == 0;
+}
+
+static void dt_identity(struct dt_writer *w, const struct identity_prop *props,
+                        uint32_t count, const unsigned char *data) {
+    for (uint32_t i = 0; i < count; i++) {
+        /* Force sRGB instead of P3 so CoreAnimation/WebKit draw 8-bit BGRA, not 10-bit black tiles. */
+        if (dt_str_eq(props[i].name, "artwork-display-gamut")) {
+            dt_prop(w, props[i].name, "sRGB", 5);
+            continue;
+        }
+        dt_prop(w, props[i].name, data + props[i].offset, props[i].length);
+    }
+}
+
 static uint32_t build_apple_dt(const struct v50_ctx *ctx, uint64_t dt_pa, uint64_t dt_max,
                                uint64_t rd_pa, uint64_t rd_size) {
     struct dt_writer w;
@@ -485,7 +503,6 @@ static uint32_t build_apple_dt(const struct v50_ctx *ctx, uint64_t dt_pa, uint64
     static const unsigned char manifest_hash[48] = { 'r','u','b','y','m','t','6','8','7','7' };
     static const unsigned char no_behavior[16] = { 0 };
 
-    const char compat_root[] = "D221AP\0iPhone10,6\0ARM64";
     uint64_t ranges[3] = { 0, ctx->io_base, ctx->io_size };
     uint64_t gic_reg[4] = {
         ctx->gicd - ctx->io_base, ctx->gicd_size,
@@ -493,9 +510,7 @@ static uint32_t build_apple_dt(const struct v50_ctx *ctx, uint64_t dt_pa, uint64
     };
 
     dt_begin(&w, "device-tree");
-        dt_prop_str(&w, "model", "iPhone10,6");
-        dt_prop(&w, "compatible", compat_root, sizeof(compat_root));
-        dt_prop_str(&w, "target-type", "D221");
+        dt_identity(&w, identity_root, (uint32_t)(sizeof(identity_root) / sizeof(identity_root[0])), identity_root_data);
         dt_prop_str(&w, "platform-name", "t8015");
         dt_prop_padded(&w, "serial-number", "RUBY00MT6877", 32);
         dt_prop_padded(&w, "mlb-serial-number", "RUBY00MT6877MLB00", 32);
@@ -513,6 +528,7 @@ static uint32_t build_apple_dt(const struct v50_ctx *ctx, uint64_t dt_pa, uint64
             dt_prop_u32(&w, "debug-enabled", 1);
             dt_prop_u32(&w, "display-scale", 3);
             dt_prop_u32(&w, "display-rotation", 0);
+            dt_prop_u64(&w, "boot-epoch", 1795694400ULL);
             dt_prop_str(&w, "psci-method", ctx->psci_hvc ? "hvc" : "smc");
             dt_prop_u64(&w, "unique-chip-id", 0x0000525542590001ULL);
             dt_prop_u32(&w, "chip-id", 0x8015);
@@ -552,7 +568,13 @@ static uint32_t build_apple_dt(const struct v50_ctx *ctx, uint64_t dt_pa, uint64
         dt_end(&w);
 
         dt_begin(&w, "product");
-            dt_prop_str(&w, "product-name", "iPhone");
+            dt_identity(&w, identity_product, (uint32_t)(sizeof(identity_product) / sizeof(identity_product[0])), identity_product_data);
+            dt_begin(&w, "haptics");
+                dt_identity(&w, identity_haptics, (uint32_t)(sizeof(identity_haptics) / sizeof(identity_haptics[0])), identity_haptics_data);
+            dt_end(&w);
+            dt_begin(&w, "camera");
+                dt_identity(&w, identity_camera, (uint32_t)(sizeof(identity_camera) / sizeof(identity_camera[0])), identity_camera_data);
+            dt_end(&w);
         dt_end(&w);
 
         dt_begin(&w, "options");
@@ -598,6 +620,15 @@ static uint32_t build_apple_dt(const struct v50_ctx *ctx, uint64_t dt_pa, uint64
                 dt_prop_str(&w, "compatible", "arm,gic-v3");
                 dt_prop(&w, "reg", gic_reg, sizeof(gic_reg));
             dt_end(&w);
+            if (ctx->is_qemu) {
+                uint64_t uart_reg[2] = { 0x09000000ULL - ctx->io_base, 0x1000ULL };
+                dt_begin(&w, "uart0");
+                    dt_prop_str(&w, "device_type", "uart");
+                    dt_prop_str(&w, "compatible", "arm,pl011");
+                    dt_prop(&w, "reg", uart_reg, sizeof(uart_reg));
+                    dt_prop_u32(&w, "boot-console", 1);
+                dt_end(&w);
+            }
         dt_end(&w);
     dt_end(&w);
 
@@ -785,11 +816,19 @@ __attribute__((noinline, noreturn)) void V50BootPhysical(struct v50_ctx *ctx) {
         append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, ctx->cmdline);
         append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, " ");
     }
+#ifdef V50_DARWIN
+    if (ctx->is_qemu) {
+        append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "serial=3 virtio_input=1 virtio_net=1 nbd=1 root_apfs=nbd0 sb_delay=6 ui_lite=1");
+    } else {
+        append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "buttons=2 mtk_ufs_ro=1 mtk_usb_ecm=1 nbd=1 root_apfs=nbd0 ui_lite=1");
+    }
+#else
     if (ctx->is_qemu) {
         append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "virtio_input=1 virtio_net=1 nbd=1 keylog=1 touchlog=1 hello_wait=0 usb_hold=30");
     } else {
         append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "buttons=2 mtk_ufs_ro=1 mtk_usb_ecm=1 nbd=1 hello_wait=0 usb_hold=600");
     }
+#endif
 
     uint64_t entry_pa = ctx->entry_va + slide;
     ui_hex(ctx, 15, "XNU entry PA: ", entry_pa, COL_WHITE);
