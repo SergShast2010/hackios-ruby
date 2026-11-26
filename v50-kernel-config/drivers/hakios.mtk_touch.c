@@ -68,8 +68,8 @@ extern kern_return_t thread_terminate(thread_t);
 #define GT_PMIC_ADDR    0x64u
 #define GT_LDO3_EN      0x05u
 #define GT_LDO3_VOUT    0x09u   /* VMC/IOVDD: 0x3a = 1.8 V */
-#define GT_LDO2_EN      0x0bu
-#define GT_LDO2_VOUT    0x0fu   /* VTP/AVDD:  0xd0 = 3.3 V */
+#define GT_LDO2_EN      0x11u
+#define GT_LDO2_VOUT    0x15u   /* VTP/AVDD:  0xd0 = 3.3 V (MT6360 LDO2) */
 
 /* FocalTech FT3680 SPI v2 constants (verified against ruby focaltech_3680) */
 #define FTS_READ_CTRL       0xa0u   /* 0x80 | DATA_CRC_EN(0x20) */
@@ -553,10 +553,11 @@ fts_frame(void)
 			            | (((uint32_t)p[3]) << 3)
 			            | ((((uint32_t)(p[4] & 0x30u)) >> 4) << 1)
 			            | (((uint32_t)(p[2] & 0x10u)) >> 4);
-			uint32_t x = rx / 10u;
-			uint32_t y = ry / 10u;
-			if (x > 1079u) x = 1079u;
-			if (y > 2399u) y = 2399u;
+			if (rx > 10799u) rx = 10799u;
+			if (ry > 23999u) ry = 23999u;
+			/* hakios_touch_post() expects 0..65535 normalized display coordinates */
+			uint32_t x = (uint32_t)(((uint64_t)rx * 65535u) / 10799u);
+			uint32_t y = (uint32_t)(((uint64_t)ry * 65535u) / 23999u);
 			mask |= (1u << id);
 			gt.x[id] = x;
 			gt.y[id] = y;
@@ -697,10 +698,13 @@ gt_frame(void)
 				gt_clear_sync();
 				return EIO;
 			}
-			uint32_t x = ((uint32_t)p[2] | ((uint32_t)p[3] << 8)) / 10u;
-			uint32_t y = ((uint32_t)p[4] | ((uint32_t)p[5] << 8)) / 10u;
-			if (x > 1079u) x = 1079u;
-			if (y > 2399u) y = 2399u;
+			uint32_t rx = (uint32_t)p[2] | ((uint32_t)p[3] << 8);
+			uint32_t ry = (uint32_t)p[4] | ((uint32_t)p[5] << 8);
+			if (rx > 10799u) rx = 10799u;
+			if (ry > 23999u) ry = 23999u;
+			/* hakios_touch_post() expects 0..65535 normalized display coordinates */
+			uint32_t x = (uint32_t)(((uint64_t)rx * 65535u) / 10799u);
+			uint32_t y = (uint32_t)(((uint64_t)ry * 65535u) / 23999u);
 			mask |= (1u << id);
 			gt.x[id] = x;
 			gt.y[id] = y;

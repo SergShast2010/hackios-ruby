@@ -472,6 +472,8 @@ def main():
     ap.add_argument("--darwin", action="store_true",
                     help="Serve HakiOS Darwin 16.5 preset: unit0=rootfs+cryptex-os+cryptex-app, unit1=root.apfs")
     ap.add_argument("--var-hfs", type=Path, help="Optional persistent HFS+ var image for /dev/nbd2 (:rw)")
+    ap.add_argument("--no-var", action="store_true", help="In --darwin mode, do not export unit2 (var.hfs)")
+    ap.add_argument("--no-jb", action="store_true", help="In --darwin mode, do not export unit3 (jb.apfs)")
     ap.add_argument("--make-test-apfs", type=Path, help="Generate deterministic test APFS image at this path")
     ap.add_argument("--test-mb", type=int, default=8, help="Payload MiB inside test APFS (default 8)")
     ap.add_argument("--make-test-rw", type=Path, help="Generate 1 MiB RW scratch disk at this path")
@@ -495,6 +497,12 @@ def main():
             args.unit0 = f"{sysdir / 'rootfs.apfs'}+{sysdir / 'cryptex-os.dmg'}+{sysdir / 'cryptex-app.dmg'}:ro"
         if not args.unit1:
             args.unit1 = f"{XNU_ROOT / 'userland' / 'root.apfs'}:ro"
+        default_var = sysdir / "var.hfs"
+        if not args.unit2 and not args.var_hfs and not args.no_var and default_var.exists():
+            args.unit2 = f"{default_var}:rw"
+        default_jb = sysdir / "jb.apfs"
+        if not args.unit3 and not args.no_jb and default_jb.exists():
+            args.unit3 = f"{default_jb}:ro"
     if args.var_hfs and not args.unit2:
         args.unit2 = f"{args.var_hfs}:rw"
 

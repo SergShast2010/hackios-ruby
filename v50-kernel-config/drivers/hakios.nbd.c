@@ -841,15 +841,34 @@ nbd_dev_ioctl(dev_t dev, u_long cmd, caddr_t data, __unused int fflag, __unused 
 			return EINVAL;
 		}
 		return 0;
+	case DKIOCGETPHYSICALBLOCKSIZE:
+		*(uint32_t *)data = 4096u;
+		return 0;
 	case DKIOCGETBLOCKCOUNT:
 		*(uint64_t *)data = sectors;
+		return 0;
+	case DKIOCGETBASE:
+		*(uint64_t *)data = 0;
 		return 0;
 	case DKIOCISWRITABLE:
 		*(uint32_t *)data = ro ? 0u : 1u;
 		return 0;
+	case DKIOCGETFEATURES:
+		*(uint32_t *)data = 0;
+		return 0;
 	case DKIOCGETMAXBLOCKCOUNTREAD:
 	case DKIOCGETMAXBLOCKCOUNTWRITE:
 		*(uint64_t *)data = NBD_MAX_XFER / NBD_SECTOR_SIZE;
+		return 0;
+	case DKIOCGETMAXBYTECOUNTREAD:
+	case DKIOCGETMAXBYTECOUNTWRITE:
+	case DKIOCGETMAXSEGMENTBYTECOUNTREAD:
+	case DKIOCGETMAXSEGMENTBYTECOUNTWRITE:
+		*(uint64_t *)data = NBD_MAX_XFER;
+		return 0;
+	case DKIOCGETMAXSEGMENTCOUNTREAD:
+	case DKIOCGETMAXSEGMENTCOUNTWRITE:
+		*(uint64_t *)data = 64u;
 		return 0;
 	case DKIOCSYNCHRONIZE:
 	case DKIOCSYNCHRONIZECACHE:
