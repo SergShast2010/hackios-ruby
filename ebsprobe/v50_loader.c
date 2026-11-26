@@ -820,7 +820,7 @@ __attribute__((noinline, noreturn)) void V50BootPhysical(struct v50_ctx *ctx) {
     if (ctx->is_qemu) {
         append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "serial=3 virtio_input=1 virtio_net=1 nbd=1 root_apfs=nbd0 sb_delay=6 ui_lite=1");
     } else {
-        append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "buttons=2 mtk_ufs_ro=1 mtk_usb_ecm=1 nbd=1 root_apfs=nbd0 ui_lite=1");
+        append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "buttons=2 mtk_ufs_ro=1 mtk_usb_ecm=1 nbd=1 root_apfs=nbd0 sb_delay=6 ui_lite=1");
     }
 #else
     if (ctx->is_qemu) {
@@ -866,7 +866,9 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
 
     const char *log = (const char *)(uintptr_t)log_pa;
     int valid_log = (log_pa >= 0x40000000ULL && log_len > 0 && log_len <= 2ULL * 1024ULL * 1024ULL);
-    int hello_ok = valid_log && sfind_n(log, log_len, "Hello from user space on Darwin!");
+    int hello_ok = valid_log && (sfind_n(log, log_len, "Hello from user space on Darwin!") ||
+                                 sfind_n(log, log_len, "stage0: mounted /dev/nbd1") ||
+                                 sfind_n(log, log_len, "stage0: waiting for USB ECM"));
     int gic_ok   = valid_log && sfind_n(log, log_len, "gic: v3");
     int bsd_ok   = valid_log && sfind_n(log, log_len, "bsd_init: done");
     int smp_ok   = (ctx->cpu_count <= 1u) || (valid_log && sfind_n(log, log_len, "processors are running"));
@@ -880,6 +882,15 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
     int nbd_up   = valid_log && sfind_n(log, log_len, "nbd0: connected");
     int real_panic = valid_log && sfind_n(log, log_len, "panic(") && !sfind_n(log, log_len, "PID 1 DONE") && !sfind_n(log, log_len, "INPUT SUMMARY:");
 
+#ifdef V50_DARWIN
+    if (hello_ok && !real_panic) {
+        ui_line(ctx, 0, "RUBY v0.60b: DARWIN 16.5 NBD RETURNED", COL_GREEN);
+    } else if (real_panic) {
+        ui_line(ctx, 0, "RUBY v0.60b: DARWIN PANIC (SEE LOG)", COL_RED);
+    } else {
+        ui_line(ctx, 0, "RUBY v0.60b: DARWIN RETURNED (SEE LOG)", COL_YELLOW);
+    }
+#else
     if (hello_ok && !real_panic) {
         ui_line(ctx, 0, "RUBY v0.56b: XNU 4GB+SMP+USB+NBD PASS!", COL_GREEN);
     } else if (real_panic) {
@@ -887,6 +898,7 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
     } else {
         ui_line(ctx, 0, "RUBY v0.56b: XNU RETURNED (SEE LOG)", COL_YELLOW);
     }
+#endif
     ui_hex(ctx, 1, "RAMbase: ", ctx->xnu_phys_base, COL_WHITE);
     ui_hex(ctx, 2, "RAMsize: ", ctx->xnu_mem_size, ctx->ram_probe_fail_pa ? COL_YELLOW : COL_GREEN);
     ui_hex(ctx, 3, "code/ESR:", code, reason ? COL_RED : COL_WHITE);
@@ -1138,7 +1150,11 @@ __attribute__((noinline, noreturn)) void V50OnException(
     ctx->physical = 1;
     g_con = NULL;
     fb_clear(ctx);
+#ifdef V50_DARWIN
+    ui_line(ctx, 0, "RUBY v0.60b: EARLY LOADER EXCEPTION", COL_RED);
+#else
     ui_line(ctx, 0, "RUBY v0.56b: EARLY LOADER EXCEPTION", COL_RED);
+#endif
     ui_hex(ctx, 2, "Vector: ", vec, COL_YELLOW);
     ui_hex(ctx, 3, "ESR:    ", esr, COL_RED);
     ui_hex(ctx, 4, "ELR:    ", elr, COL_WHITE);
@@ -1307,7 +1323,11 @@ efi_status EFIAPI efi_main(efi_handle image, efi_system_table *st) {
 #else
     fb_clear(&ctx);
 #endif
+#ifdef V50_DARWIN
+    ui_line(&ctx, 0, "ruby v0.60b - HakiOS iOS 16.5 (Darwin 22.5) NBD", COL_GREEN);
+#else
     ui_line(&ctx, 0, "ruby v0.56 - HakiOS 4 GiB + 8C + USB ECM + NBD APFS", COL_GREEN);
+#endif
 
     uint64_t el = 0;
     __asm__ volatile("mrs %0, CurrentEL" : "=r"(el));

@@ -1,0 +1,51 @@
+diff --git a/drivers/net/hakios.net.c b/drivers/net/hakios.net.c
+index 5c42b95..150f73f 100644
+--- a/drivers/net/hakios.net.c
++++ b/drivers/net/hakios.net.c
+@@ -307,6 +307,19 @@ hakios_net_link_state(bool up)
+ 	hakios_net_link_state_unit(0, up);
+ }
+ 
++bool
++hakios_net_is_up_unit(unsigned unit)
++{
++	struct net_if *n = net_if_unit(unit);
++	return n != NULL && n->up;
++}
++
++bool
++hakios_net_is_up(void)
++{
++	return hakios_net_is_up_unit(0);
++}
++
+ /* The interface's own thread: for a link that wants to be asked, and for the minute's line in the log. */
+ static void
+ net_thread(void *parameter, __unused wait_result_t result)
+@@ -425,4 +438,5 @@ hakios_net_init(void)
+ 	PE_parse_boot_argn("net_trace", &net_trace, sizeof(net_trace));
+ 	PE_parse_boot_argn("net_names", &net_names, sizeof(net_names));
+ 	hakios_virtio_net_init();
++	hakios_mtk_usb_ecm_init();
+ }
+diff --git a/xnu/files/bsd/sys/hakios.net.h b/xnu/files/bsd/sys/hakios.net.h
+index 5b68142..8501ced 100644
+--- a/xnu/files/bsd/sys/hakios.net.h
++++ b/xnu/files/bsd/sys/hakios.net.h
+@@ -58,10 +58,16 @@ void hakios_net_input_unit(unsigned unit, const uint8_t *frame, size_t length);
+ void hakios_net_link_state(bool up);
+ void hakios_net_link_state_unit(unsigned unit, bool up);
+ 
++/* Whether en0 / en<unit> is attached and its link is currently up. */
++bool hakios_net_is_up(void);
++bool hakios_net_is_up_unit(unsigned unit);
++
+ void hakios_net_init(void);            /* the links there are: each looks for its hardware (or its boot-arg) */
+ /* an Apple80211 request (SIOCGA80211, SIOCSA80211) for the interface of a radio: hakios.apple80211.c */
+ errno_t hakios_apple80211_ioctl(u_long command, void *data);
+ void hakios_virtio_net_init(void);     /* boot-arg virtio_net=1: QEMU's virtio network device */
++void hakios_mtk_usb_ecm_init(void);    /* boot-arg mtk_usb_ecm=1: MT6877 USB MTU3 + CDC-ECM */
++void hakios_mtk_usb_ecm_quiesce(void); /* stop QMU + detach USB before loader_return */
+ #endif /* KERNEL */
+ 
+ #endif /* _SYS_HAKIOS_NET_H_ */

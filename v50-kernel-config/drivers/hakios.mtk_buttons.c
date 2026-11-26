@@ -48,6 +48,7 @@ extern void hakios_mtk_usb_ecm_log_stats(void) __attribute__((weak));
 
 #define RK_POLL_MS         20u
 #define RK_COMBO_TICKS     (1500u / RK_POLL_MS)
+#define RK_HOME_TICKS      (700u / RK_POLL_MS)
 
 struct rk_key {
 	const char *name;
@@ -68,6 +69,9 @@ static int rk_log;
 static int rk_sleep_chan;
 static unsigned rk_errors;
 static unsigned rk_combo_ticks;
+static unsigned rk_home_ticks;
+static bool rk_home_down;
+static bool rk_home_sent;
 
 static inline uint32_t
 rk_rd32(vm_offset_t base, uint32_t off)
@@ -162,6 +166,7 @@ rk_thread(__unused void *arg, __unused wait_result_t result)
 		}
 
 		if (rk_keys[1].down && rk_keys[2].down) {
+			rk_home_ticks = 0;
 			if (++rk_combo_ticks == RK_COMBO_TICKS) {
 				printf("mtk_buttons: VolUp+VolDown hold -> loader_return\n");
 				if (hakios_mtk_usb_ecm_log_stats) hakios_mtk_usb_ecm_log_stats();
@@ -170,6 +175,26 @@ rk_thread(__unused void *arg, __unused wait_result_t result)
 			}
 		} else {
 			rk_combo_ticks = 0;
+		}
+
+		/* Hold VolDown alone for 0.7 s -> synthetic HOME tap (unlocks SpringBoard without touch). */
+		if (rk_keys[2].down && !rk_keys[1].down && !rk_keys[0].down) {
+			if (!rk_home_sent && ++rk_home_ticks >= RK_HOME_TICKS) {
+				rk_home_sent = true;
+				rk_home_down = true;
+				printf("mtk_buttons: VolDown hold -> HOME\n");
+				hakios_touch_post(HAKIOS_BUTTON_DOWN, HAKIOS_BUTTON_HOME, 0, 0);
+			} else if (rk_home_down && ++rk_home_ticks >= RK_HOME_TICKS + 4u) {
+				rk_home_down = false;
+				hakios_touch_post(HAKIOS_BUTTON_UP, HAKIOS_BUTTON_HOME, 0, 0);
+			}
+		} else {
+			if (rk_home_down) {
+				rk_home_down = false;
+				hakios_touch_post(HAKIOS_BUTTON_UP, HAKIOS_BUTTON_HOME, 0, 0);
+			}
+			rk_home_ticks = 0;
+			rk_home_sent = false;
 		}
 
 		uint64_t deadline;

@@ -374,6 +374,83 @@ def handle_client(conn: socket.socket, addr, units: dict[int, UnitExport], quiet
             pass
 
 
+
+def _run_priv(cmd: list[str]) -> tuple[int, str]:
+    full = cmd if os.geteuid() == 0 else ["sudo", "-n", *cmd]
+    r = subprocess.run(full, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    return r.returncode, (r.stdout or "").strip()
+
+
+def _find_ecm_iface(target_mac: str) -> str | None:
+    net_dir = Path("/sys/class/net")
+    if not net_dir.is_dir():
+        return None
+    target = target_mac.lower()
+    for iface in sorted(net_dir.iterdir()):
+        try:
+            mac = (iface / "address").read_text().strip().lower()
+        except OSError:
+            continue
+        if mac == target:
+            return iface.name
+    return None
+
+
+def _iface_has_ip_up(iface: str, host_cidr: str) -> bool:
+    host_ip = host_cidr.split("/")[0]
+    r = subprocess.run(["ip", "-4", "-o", "addr", "show", "dev", iface],
+                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    if host_ip not in (r.stdout or ""):
+        return False
+    r2 = subprocess.run(["ip", "-o", "link", "show", "dev", iface],
+                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    return "UP" in (r2.stdout or "")
+
+
+def start_auto_net(target_mac: str = "02:00:5e:77:ee:01", host_cidr: str = "192.168.7.1/24") -> None:
+    if os.geteuid() != 0:
+        # Refresh sudo credentials once interactively before spawning background monitor.
+        rc = subprocess.run(["sudo", "-v"]).returncode
+        if rc != 0:
+            print("[net] warning: sudo auth failed; --auto-net cannot configure cdc_ether automatically", flush=True)
+            return
+    rc, out = _run_priv(["modprobe", "cdc_ether"])
+    if rc == 0:
+        print(f"[net] cdc_ether loaded; watching for USB ECM MAC {target_mac} -> {host_cidr}", flush=True)
+    else:
+        print(f"[net] modprobe cdc_ether returned {rc}: {out}", flush=True)
+
+    def _watch():
+        last_iface = None
+        last_ready = False
+        while True:
+            iface = _find_ecm_iface(target_mac)
+            if iface is None:
+                if last_iface is not None:
+                    print(f"[net] USB ECM interface {last_iface} disconnected; waiting for reconnect...", flush=True)
+                    last_iface = None
+                    last_ready = False
+                time.sleep(0.25)
+                continue
+            if iface != last_iface or not _iface_has_ip_up(iface, host_cidr):
+                rc1, out1 = _run_priv(["ip", "addr", "replace", host_cidr, "dev", iface])
+                rc2, out2 = _run_priv(["ip", "link", "set", iface, "up"])
+                if rc1 == 0 and rc2 == 0:
+                    print(f"[net] USB ECM ready: {iface} ({target_mac}) -> {host_cidr} UP", flush=True)
+                    last_iface = iface
+                    last_ready = True
+                else:
+                    if last_ready or iface != last_iface:
+                        print(f"[net] failed to configure {iface}: addr({rc1})={out1} link({rc2})={out2}", flush=True)
+                    last_iface = iface
+                    last_ready = False
+                    time.sleep(1.0)
+                    continue
+            time.sleep(0.35)
+
+    threading.Thread(target=_watch, daemon=True).start()
+
+
 def parse_unit_spec(spec: str) -> tuple[list[Path], bool]:
     writable = False
     if spec.endswith(":rw"):
@@ -398,6 +475,12 @@ def main():
     ap.add_argument("--make-test-apfs", type=Path, help="Generate deterministic test APFS image at this path")
     ap.add_argument("--test-mb", type=int, default=8, help="Payload MiB inside test APFS (default 8)")
     ap.add_argument("--make-test-rw", type=Path, help="Generate 1 MiB RW scratch disk at this path")
+    ap.add_argument("--auto-net", action="store_true",
+                    help="Load cdc_ether and auto-configure 192.168.7.1/24 whenever ruby USB ECM attaches")
+    ap.add_argument("--net-mac", default="02:00:5e:77:ee:01",
+                    help="Host-side USB ECM MAC to watch with --auto-net (default 02:00:5e:77:ee:01)")
+    ap.add_argument("--net-cidr", default="192.168.7.1/24",
+                    help="Host IP/prefix to assign with --auto-net (default 192.168.7.1/24)")
     ap.add_argument("--quiet", action="store_true", help="Suppress per-connection log lines")
     args = ap.parse_args()
 
@@ -431,6 +514,9 @@ def main():
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind((args.bind, args.port))
     srv.listen(16)
+
+    if args.auto_net:
+        start_auto_net(args.net_mac, args.net_cidr)
 
     print(f"[nbd] HNBD v1 listening on {args.bind}:{args.port}", flush=True)
     for uid, u in sorted(units.items()):

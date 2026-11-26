@@ -35,6 +35,7 @@
 #include <sys/errno.h>
 #include <sys/fcntl.h>
 #include <sys/hakios.nbd.h>
+#include <sys/hakios.net.h>
 #include <sys/kpi_socket.h>
 #include <sys/socket.h>
 #include <sys/sysctl.h>
@@ -327,6 +328,13 @@ nbd_connect_worker(struct nbd_unit *d, bool verbose)
 	if (ip == 0 || nbd_quiesced) {
 		return ENXIO;
 	}
+	if (!hakios_net_is_up()) {
+		lck_mtx_lock(&d->lock);
+		d->connected = false;
+		d->last_err = ENETDOWN;
+		lck_mtx_unlock(&d->lock);
+		return ENETDOWN;
+	}
 
 	nbd_close_socket(d);
 
@@ -408,10 +416,11 @@ fail:
 		sock_close(so);
 	}
 	lck_mtx_lock(&d->lock);
+	int prev_err = d->last_err;
 	d->connected = false;
 	d->last_err = err;
 	lck_mtx_unlock(&d->lock);
-	if (verbose) {
+	if (verbose && err != prev_err) {
 		format_ipv4(ip, ipstr, sizeof(ipstr));
 		printf("nbd%d: connect %s:%u failed (err=%d)\n",
 		    d->index, ipstr, (unsigned)port, err);
@@ -595,9 +604,16 @@ nbd_worker(void *arg, __unused wait_result_t wr)
 		}
 
 		if (try_auto) {
-			if (nbd_connect_worker(d, false) != 0 && !nbd_quiesced) {
+			uint32_t wait_ms = 1000u;
+			int cerr = ENETDOWN;
+			if (!hakios_net_is_up()) {
+				wait_ms = 250u;
+			} else {
+				cerr = nbd_connect_worker(d, false);
+			}
+			if (cerr != 0 && !nbd_quiesced) {
 				uint64_t dl;
-				clock_interval_to_deadline(1000, NSEC_PER_MSEC, &dl);
+				clock_interval_to_deadline(wait_ms, NSEC_PER_MSEC, &dl);
 				lck_mtx_lock(&d->lock);
 				if (!d->ctrl_pending && d->q_head == NULL && !nbd_quiesced) {
 					(void)lck_mtx_sleep_deadline(&d->lock, LCK_SLEEP_DEFAULT,
@@ -703,6 +719,9 @@ nbd_dev_open(dev_t dev, int flags, __unused int devtype, __unused proc_t p)
 	lck_mtx_unlock(&d->lock);
 
 	if (!conn && ip != 0) {
+		if (!hakios_net_is_up()) {
+			return ENETDOWN;
+		}
 		if (nbd_submit_ctrl(d, NBD_CTRL_CONNECT, ip, port, d->auto_connect) == 0) {
 			lck_mtx_lock(&d->lock);
 			conn = d->connected;
