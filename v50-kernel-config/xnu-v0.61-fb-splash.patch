@@ -1,0 +1,213 @@
+--- /home/sergsh/hackios/hakios-xnu-kernel/./xnu/files/iokit/Kernel/MiniIOMobileFramebuffer.cpp	2026-11-21 12:47:05.081864151 +0300
++++ /home/sergsh/hackios/hakios-xnu-kernel/xnu-src/xnu-8796.121.2/iokit/Kernel/MiniIOMobileFramebuffer.cpp	2026-11-27 16:25:57.907368191 +0300
+@@ -839,8 +839,12 @@
+ 		}
+ 		to = (uint32_t *) (fBase + (size_t) y * fRowBytes);
+ 		if (job->unscaled) {
+-			/* not scaled at all */
+-			memcpy(to + px0, pixels + (size_t) (sy + y - py0) * stride + (size_t) sx * 4, (size_t) sw * 4);
++			/* not scaled at all; force alpha=0xFF so MTK OVL never bleeds underlying LK splash */
++			const uint32_t * __restrict src_row = (const uint32_t *) (pixels + (size_t) (sy + y - py0) * stride) + sx;
++			uint32_t * __restrict dst_row = to + px0;
++			for (int32_t i = 0; i < sw; i++) {
++				dst_row[i] = src_row[i] | 0xFF000000u;
++			}
+ 			continue;
+ 		}
+ 		if (filter) {
+@@ -888,11 +892,11 @@
+ 			for (uint32_t i = 0, n = (uint32_t) (cx1 - cx0); i < n; i++) {
+ 				uint32_t c = column[i], w = weights[i], a = from[c];
+ 
+-				out[i] = w == 0 || a == from[c + 1] ? a : blend(a, from[c + 1], w);
++				out[i] = (w == 0 || a == from[c + 1] ? a : blend(a, from[c + 1], w)) | 0xFF000000u;
+ 			}
+ 		} else {
+ 			for (int32_t x = cx0; x < cx1; x++) {
+-				to[x] = from[fColumn[x]];
++				to[x] = from[fColumn[x]] | 0xFF000000u;
+ 			}
+ 		}
+ 	}
+@@ -1508,11 +1512,15 @@
+ 			}
+ 		}
+ 		if (sid == 0) {
+-			/* the bottom layer taken away: nothing is shown, the screen is black */
+-			if (layer == 0 && (set & 1) && fGraphics) {
++			/* the bottom layer taken away: opaque black (alpha=0xFF) so MTK OVL never shows LK Xiaomi splash */
++			if (layer == 0 && ((set & 1) || (swapWord(swap, SWAP_LAYERS_CLEARED) & 1)) && fGraphics) {
+ 				for (uint32_t y = 0; y < fPanelHeight; y++) {
+-					bzero(fBase + (size_t) y * fRowBytes, (size_t) fPanelWidth * 4);
++					uint32_t * __restrict row = (uint32_t *) (fBase + (size_t) y * fRowBytes);
++					for (uint32_t x = 0; x < fPanelWidth; x++) {
++						row[x] = 0xFF000000u;
++					}
+ 				}
++				__asm__ volatile("dsb sy" ::: "memory");
+ 			}
+ 			continue;
+ 		}
+@@ -2052,6 +2060,162 @@
+ 	}
+ }
+ 
++/*
++ * sysctl kern.hakios_boot_splash: accepts Apple's real /usr/share/progressui/applelogo@3x.tga
++ * (32-bit RLE or raw BGRA TGA) from PID 1 right before execve("/sbin/launchd"), stops the
++ * video text console, clears the panel to opaque black (0xFF000000), and composites the
++ * anti-aliased Apple logo dead-center on the panel.
++ */
++static int
++hakios_boot_splash_sysctl SYSCTL_HANDLER_ARGS
++{
++#pragma unused(oidp, arg1, arg2)
++	if (req->newptr == USER_ADDR_NULL) {
++		return 0;
++	}
++	if (req->newlen < 18 || req->newlen > 65536) {
++		return EINVAL;
++	}
++	if (vinfo.v_baseaddr == 0 || vinfo.v_width == 0 || vinfo.v_height == 0 || vinfo.v_depth != 32) {
++		return ENODEV;
++	}
++
++	size_t tga_len = req->newlen;
++	uint8_t *tga = (uint8_t *) kalloc_data(tga_len, Z_WAITOK);
++	if (tga == NULL) {
++		return ENOMEM;
++	}
++	int err = SYSCTL_IN(req, tga, tga_len);
++	if (err != 0) {
++		kfree_data(tga, tga_len);
++		return err;
++	}
++
++	uint8_t idlen = tga[0];
++	uint8_t imgtype = tga[2];
++	uint16_t w = (uint16_t) (tga[12] | ((uint16_t) tga[13] << 8));
++	uint16_t h = (uint16_t) (tga[14] | ((uint16_t) tga[15] << 8));
++	uint8_t bpp = tga[16];
++	uint8_t desc = tga[17];
++	bool top_origin = (desc & 0x20u) != 0;
++
++	if ((imgtype != 10 && imgtype != 2) || bpp != 32 || w == 0 || h == 0 || w > 640 || h > 640) {
++		kfree_data(tga, tga_len);
++		return EINVAL;
++	}
++
++	size_t npx = (size_t) w * (size_t) h;
++	size_t px_bytes = npx * 4;
++	uint8_t *px = (uint8_t *) kalloc_data(px_bytes, Z_WAITOK);
++	if (px == NULL) {
++		kfree_data(tga, tga_len);
++		return ENOMEM;
++	}
++	bzero(px, px_bytes);
++
++	size_t pos = 18u + idlen;
++	if (imgtype == 2) {
++		if (pos + px_bytes <= tga_len) {
++			memcpy(px, tga + pos, px_bytes);
++		}
++	} else {
++		size_t out_px = 0;
++		while (out_px < npx && pos < tga_len) {
++			uint8_t hdr = tga[pos++];
++			size_t cnt = (size_t) (hdr & 0x7fu) + 1u;
++			if (out_px + cnt > npx) {
++				cnt = npx - out_px;
++			}
++			if (hdr & 0x80u) {
++				if (pos + 4 > tga_len) {
++					break;
++				}
++				const uint8_t *p = tga + pos;
++				pos += 4;
++				for (size_t k = 0; k < cnt; k++) {
++					uint8_t *d = px + (out_px + k) * 4;
++					d[0] = p[0]; d[1] = p[1]; d[2] = p[2]; d[3] = p[3];
++				}
++			} else {
++				size_t nbytes = cnt * 4;
++				if (pos + nbytes > tga_len) {
++					nbytes = (tga_len - pos) & ~(size_t) 3;
++					cnt = nbytes / 4;
++				}
++				memcpy(px + out_px * 4, tga + pos, nbytes);
++				pos += nbytes;
++			}
++			out_px += cnt;
++		}
++	}
++	kfree_data(tga, tga_len);
++
++	/* Find tight visible bounding box so logo sits dead-center on panel */
++	uint32_t minx = w, miny = h, maxx = 0, maxy = 0;
++	for (uint32_t y = 0; y < h; y++) {
++		uint32_t sy = top_origin ? y : (h - 1u - y);
++		const uint8_t *row = px + (size_t) sy * w * 4;
++		for (uint32_t x = 0; x < w; x++) {
++			if (row[x * 4 + 3] > 0) {
++				if (x < minx) minx = x;
++				if (x > maxx) maxx = x;
++				if (y < miny) miny = y;
++				if (y > maxy) maxy = y;
++			}
++		}
++	}
++
++	/* Silence video text console and clear panel to opaque black */
++	PE_initialize_console(NULL, kPEGraphicsMode);
++	PE_initialize_console(NULL, kPEDisableScreen);
++
++	uint32_t pw = (uint32_t) vinfo.v_width;
++	uint32_t ph = (uint32_t) vinfo.v_height;
++	uint32_t rb = (uint32_t) vinfo.v_rowbytes;
++	uint8_t *fb = (uint8_t *) vinfo.v_baseaddr;
++
++	for (uint32_t y = 0; y < ph; y++) {
++		uint32_t * __restrict row = (uint32_t *) (fb + (size_t) y * rb);
++		for (uint32_t x = 0; x < pw; x++) {
++			row[x] = 0xFF000000u;
++		}
++	}
++
++	if (minx <= maxx && miny <= maxy) {
++		uint32_t bw = maxx - minx + 1u;
++		uint32_t bh = maxy - miny + 1u;
++		int32_t dx0 = ((int32_t) pw - (int32_t) bw) / 2;
++		int32_t dy0 = ((int32_t) ph - (int32_t) bh) / 2;
++		for (uint32_t y = 0; y < bh; y++) {
++			int32_t py = dy0 + (int32_t) y;
++			if (py < 0 || (uint32_t) py >= ph) continue;
++			uint32_t sy = top_origin ? (miny + y) : (h - 1u - (miny + y));
++			const uint8_t *srow = px + (size_t) sy * w * 4;
++			uint32_t *drow = (uint32_t *) (fb + (size_t) py * rb);
++			for (uint32_t x = 0; x < bw; x++) {
++				int32_t px_dst = dx0 + (int32_t) x;
++				if (px_dst < 0 || (uint32_t) px_dst >= pw) continue;
++				const uint8_t *sp = srow + (size_t) (minx + x) * 4;
++				uint32_t a = sp[3];
++				if (a == 0) continue;
++				uint32_t b = (sp[0] * a) / 255u;
++				uint32_t g = (sp[1] * a) / 255u;
++				uint32_t r = (sp[2] * a) / 255u;
++				drow[px_dst] = 0xFF000000u | (r << 16) | (g << 8) | b;
++			}
++		}
++		IOLog("MiniIOMobileFramebuffer: real Apple boot splash drawn (%ux%u from %ux%u TGA)\n", bw, bh, w, h);
++	}
++	__asm__ volatile("dsb sy" ::: "memory");
++	kfree_data(px, px_bytes);
++	return 0;
++}
++
++SYSCTL_PROC(_kern, OID_AUTO, hakios_boot_splash,
++    CTLTYPE_OPAQUE | CTLFLAG_WR | CTLFLAG_LOCKED,
++    NULL, 0, hakios_boot_splash_sysctl, "-",
++    "Render real Apple boot splash TGA and stop video text console");
++
+ void
+ MiniIOMobileFramebufferStart(IOService * provider)
+ {
