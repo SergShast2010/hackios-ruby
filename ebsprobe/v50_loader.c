@@ -9,7 +9,7 @@
 #include "IrqFdt.h"
 #include "v50_ram_select.h"
 #include "identity.h"
-#ifdef V50_APPLE_SPLASH
+#if defined(V50_APPLE_SPLASH) && !defined(V50_DARWIN)
 #include "v50_apple_logo.h"
 #endif
 
@@ -245,7 +245,7 @@ static void fb_clear(const struct v50_ctx *ctx) {
     else __asm__ volatile("dsb sy" ::: "memory");
 }
 
-#ifdef V50_APPLE_SPLASH
+#if defined(V50_APPLE_SPLASH) && !defined(V50_DARWIN)
 static void fb_draw_apple(const struct v50_ctx *ctx) {
     if (!ctx->fb_base || !ctx->fb_width || !ctx->fb_height) return;
     fb_clear(ctx);
@@ -322,7 +322,7 @@ static void fb_draw_text(const struct v50_ctx *ctx, uint32_t x0, uint32_t y0, ui
 }
 
 static void ui_line(const struct v50_ctx *ctx, uint32_t row, const char *s, uint32_t color) {
-#ifdef V50_APPLE_SPLASH
+#if defined(V50_APPLE_SPLASH) && !defined(V50_DARWIN)
     if (!ctx->physical) {
         (void)row; (void)s; (void)color;
         return;
@@ -783,10 +783,10 @@ __attribute__((noinline, noreturn)) void V50BootPhysical(struct v50_ctx *ctx) {
 
     if (ctx->fb_base) {
         ba->video.v_baseAddr = ctx->fb_base;
-#ifdef V50_APPLE_SPLASH
-        ba->video.v_display = 1; /* graphics mode: keep Apple splash logo on screen */
+#if defined(V50_APPLE_SPLASH) && !defined(V50_DARWIN)
+        ba->video.v_display = 1; /* graphics mode: keep static splash logo on screen */
 #else
-        ba->video.v_display = 0; /* text console mode for -v */
+        ba->video.v_display = 0; /* text console mode for early boot logs (Darwin splash switches to real Apple TGA before launchd) */
 #endif
         ba->video.v_rowBytes = ctx->fb_pitch;
         ba->video.v_width = ctx->fb_width;
@@ -804,7 +804,7 @@ __attribute__((noinline, noreturn)) void V50BootPhysical(struct v50_ctx *ctx) {
         append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, cbuf);
     }
     if (rd_size) append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "rd=md0 ");
-#ifndef V50_APPLE_SPLASH
+#if !defined(V50_APPLE_SPLASH) || defined(V50_DARWIN)
     append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "-v ");
 #endif
     if (ctx->kver[0]) {
@@ -818,10 +818,13 @@ __attribute__((noinline, noreturn)) void V50BootPhysical(struct v50_ctx *ctx) {
     }
 #ifdef V50_DARWIN
     if (ctx->is_qemu) {
-        append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "serial=3 virtio_input=1 virtio_net=1 nbd=1 root_apfs=nbd0 var_hfs=nbd2 sb_delay=6 ui_lite=0 fb_threads=4 fb_ca_hz=120");
+        append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "serial=3 virtio_input=1 virtio_net=1 nbd=1 root_apfs=nbd0 var_hfs=nbd2 sb_delay=12 ui_lite=0 fb_threads=4 fb_ca_hz=120");
     } else {
-        append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "buttons=2 touchscreen=2 touchlog=1 mtk_ufs_ro=1 mtk_usb_ecm=1 nbd=1 root_apfs=nbd0 var_hfs=nbd2 sb_delay=6 ui_lite=0 fb_threads=4 fb_ca_hz=120");
+        append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "buttons=2 touchscreen=2 touchlog=1 mtk_ufs_ro=1 mtk_usb_ecm=1 nbd=1 root_apfs=nbd0 var_hfs=nbd2 sb_delay=12 ui_lite=0 fb_threads=4 fb_ca_hz=120");
     }
+#ifdef V50_APPLE_SPLASH
+    append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, " boot_splash=1");
+#endif
 #else
     if (ctx->is_qemu) {
         append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "virtio_input=1 virtio_net=1 nbd=1 keylog=1 touchlog=1 hello_wait=0 usb_hold=30");
@@ -836,8 +839,9 @@ __attribute__((noinline, noreturn)) void V50BootPhysical(struct v50_ctx *ctx) {
     ui_hex(ctx, 17, "return slot:  ", slot_pa, slot_pa ? COL_GREEN : COL_YELLOW);
     ui_line(ctx, 18, "Jumping to XNU kernel now...", COL_GREEN);
 
+#if !defined(V50_APPLE_SPLASH) || defined(V50_DARWIN)
+    /* Brief pause on phone only in verbose build; splash build jumps straight into early XNU logs. */
 #ifndef V50_APPLE_SPLASH
-    /* Brief pause on phone so staging summary is visible before XNU clears the screen. */
     if (!ctx->is_qemu && ctx->cntfrq >= 1000000ULL) {
         uint64_t t0, now;
         __asm__ volatile("mrs %0, cntpct_el0" : "=r"(t0));
@@ -845,7 +849,7 @@ __attribute__((noinline, noreturn)) void V50BootPhysical(struct v50_ctx *ctx) {
             __asm__ volatile("yield\nmrs %0, cntpct_el0" : "=r"(now));
         } while (now - t0 < ctx->cntfrq * 2ULL);
     }
-
+#endif
     fb_clear(ctx);
 #else
     fb_draw_apple(ctx);
@@ -884,11 +888,11 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
 
 #ifdef V50_DARWIN
     if (hello_ok && !real_panic) {
-        ui_line(ctx, 0, "RUBY v0.60f: DARWIN 16.5 NBD RETURNED", COL_GREEN);
+        ui_line(ctx, 0, "RUBY v0.61: DARWIN 16.5 NBD RETURNED", COL_GREEN);
     } else if (real_panic) {
-        ui_line(ctx, 0, "RUBY v0.60f: DARWIN PANIC (SEE LOG)", COL_RED);
+        ui_line(ctx, 0, "RUBY v0.61: DARWIN PANIC (SEE LOG)", COL_RED);
     } else {
-        ui_line(ctx, 0, "RUBY v0.60f: DARWIN RETURNED (SEE LOG)", COL_YELLOW);
+        ui_line(ctx, 0, "RUBY v0.61: DARWIN RETURNED (SEE LOG)", COL_YELLOW);
     }
 #else
     if (hello_ok && !real_panic) {
@@ -1151,7 +1155,7 @@ __attribute__((noinline, noreturn)) void V50OnException(
     g_con = NULL;
     fb_clear(ctx);
 #ifdef V50_DARWIN
-    ui_line(ctx, 0, "RUBY v0.60f: EARLY LOADER EXCEPTION", COL_RED);
+    ui_line(ctx, 0, "RUBY v0.61: EARLY LOADER EXCEPTION", COL_RED);
 #else
     ui_line(ctx, 0, "RUBY v0.56b: EARLY LOADER EXCEPTION", COL_RED);
 #endif
@@ -1318,13 +1322,13 @@ efi_status EFIAPI efi_main(efi_handle image, efi_system_table *st) {
         if (ctx.fb_stride_px < ctx.fb_width) ctx.fb_stride_px = ctx.fb_width;
         ctx.fb_pitch = (uint64_t)ctx.fb_stride_px * 4ULL;
     }
-#ifdef V50_APPLE_SPLASH
+#if defined(V50_APPLE_SPLASH) && !defined(V50_DARWIN)
     fb_draw_apple(&ctx);
 #else
     fb_clear(&ctx);
 #endif
 #ifdef V50_DARWIN
-    ui_line(&ctx, 0, "ruby v0.60f - HakiOS iOS 16.5 (Darwin 22.5) NBD", COL_GREEN);
+    ui_line(&ctx, 0, "ruby v0.61 - HakiOS iOS 16.5 (Darwin 22.5) NBD", COL_GREEN);
 #else
     ui_line(&ctx, 0, "ruby v0.56 - HakiOS 4 GiB + 8C + USB ECM + NBD APFS", COL_GREEN);
 #endif

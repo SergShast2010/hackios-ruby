@@ -472,6 +472,7 @@ def main():
     ap.add_argument("--darwin", action="store_true",
                     help="Serve HakiOS Darwin 16.5 preset: unit0=rootfs+cryptex-os+cryptex-app, unit1=root.apfs")
     ap.add_argument("--var-hfs", type=Path, help="Optional persistent HFS+ var image for /dev/nbd2 (:rw)")
+    ap.add_argument("--reset-var", action="store_true", help="Wipe and recreate a fresh blank 2 GiB sparse var.hfs before serving")
     ap.add_argument("--no-var", action="store_true", help="In --darwin mode, do not export unit2 (var.hfs)")
     ap.add_argument("--no-jb", action="store_true", help="In --darwin mode, do not export unit3 (jb.apfs)")
     ap.add_argument("--make-test-apfs", type=Path, help="Generate deterministic test APFS image at this path")
@@ -498,6 +499,14 @@ def main():
         if not args.unit1:
             args.unit1 = f"{XNU_ROOT / 'userland' / 'root.apfs'}:ro"
         default_var = sysdir / "var.hfs"
+        if args.reset_var and not args.no_var:
+            target_var = args.var_hfs or default_var
+            target_var.parent.mkdir(parents=True, exist_ok=True)
+            if target_var.exists():
+                target_var.unlink()
+            with open(target_var, "wb") as f:
+                f.truncate(2 * 1024 * 1024 * 1024)
+            print(f"[nbd] --reset-var: created fresh 2 GiB sparse {target_var}", flush=True)
         if not args.unit2 and not args.var_hfs and not args.no_var and default_var.exists():
             args.unit2 = f"{default_var}:rw"
         default_jb = sysdir / "jb.apfs"

@@ -54,7 +54,7 @@ index c604123..a051f61 100755
  	# the third container: Apple's App cryptex as it is (10 MB; unpack.sh), for the boot volume's Cryptexes/App
  	APP=""
 diff --git a/userland/src/init.c b/userland/src/init.c
-index 6801ce2..beee07c 100644
+index 6801ce2..a4a29ef 100644
 --- a/userland/src/init.c
 +++ b/userland/src/init.c
 @@ -184,9 +184,16 @@ flash_root(const char *dev)
@@ -181,6 +181,29 @@ index 6801ce2..beee07c 100644
  	if (ok && jb != NULL) {
  		const char *to = "/private/var/jb";
  		int dirs = 0, entries = 0, grafted, users = 0;
+@@ -1329,6 +1397,22 @@ run_command(char *line)
+ 		}
+ 		if (flash_root_mode && strcmp(argv[1], "/sbin/launchd.darwin") == 0) {
+ 			argv[1] = "/sbin/launchd";      /* the root is Darwin's own volume: its launchd is that */
++			const char *sp = boot_arg("boot_splash");
++			if (sp != NULL && sp[0] == '1') {
++				static unsigned char tga[32768];
++				int tfd = open("/usr/share/progressui/applelogo@3x.tga", O_RDONLY, 0);
++				if (tfd >= 0) {
++					size_t tot = 0;
++					ssize_t r;
++					while (tot < sizeof(tga) && (r = read(tfd, tga + tot, sizeof(tga) - tot)) > 0) {
++						tot += (size_t)r;
++					}
++					close(tfd);
++					if (tot >= 18) {
++						sysctlbyname("kern.hakios_boot_splash", NULL, NULL, tga, tot);
++					}
++				}
++			}
+ 		}
+ 		execve(argv[1], argv + 1, envp);
+ 		printf("%s: %s\n", argv[1], strerror(errno));
 diff --git a/userland/src/stage0.c b/userland/src/stage0.c
 index 3f04cc9..4e2af38 100644
 --- a/userland/src/stage0.c
