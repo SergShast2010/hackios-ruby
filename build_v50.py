@@ -99,7 +99,7 @@ def build(out: Path, kernel: Path, ramdisk: Path, cmdline: str, kver: str, pack_
         )
         if image_name is None:
             if darwin:
-                image_name = 'Mu-ruby-v0.62b-darwin-splash.img' if apple_splash else 'Mu-ruby-v0.62b-darwin.img'
+                image_name = 'Mu-ruby-v0.62c-darwin-splash.img' if apple_splash else 'Mu-ruby-v0.62c-darwin.img'
             else:
                 image_name = 'Mu-ruby-v0.56b-apple-splash.img' if apple_splash else V50_IMAGE
         img = out / image_name
@@ -108,7 +108,7 @@ def build(out: Path, kernel: Path, ramdisk: Path, cmdline: str, kver: str, pack_
         (out / 'PAYLOAD.XNP').write_bytes(payload_bytes)
 
         manifest = {
-            'version': 'v0.62b' if darwin else 'v0.56b',
+            'version': 'v0.62c' if darwin else 'v0.56b',
             'image': image_name,
             'apple_splash': apple_splash,
             'image_bytes': len(image_bytes),
@@ -145,7 +145,7 @@ if __name__ == '__main__':
     ap.add_argument('--kernel-version', default='ruby-v0.56b-mt6877')
     ap.add_argument('--pack-base', type=Path, default=PACK_BASE)
     ap.add_argument('--apple-splash', action='store_true', help='Boot with Apple splash logo instead of verbose console')
-    ap.add_argument('--darwin', action='store_true', help='Build v0.62b Darwin 16.5 NBD-boot image (flashboot.apfs + root_apfs=nbd0)')
+    ap.add_argument('--darwin', action='store_true', help='Build v0.62c Darwin 16.5 NBD-boot image (flashboot.apfs + root_apfs=nbd0)')
     ap.add_argument('--image-name', default=None, help='Override output boot image filename')
     a = ap.parse_args()
     if a.darwin:
@@ -154,5 +154,5 @@ if __name__ == '__main__':
         if a.ramdisk == DEFAULT_RAMDISK:
             a.ramdisk = Path('/home/sergsh/hackios/hakios-xnu-kernel/userland/flashboot.apfs')
         if a.kernel_version == 'ruby-v0.56b-mt6877':
-            a.kernel_version = 'ruby-v0.62b-darwin16.5'
+            a.kernel_version = 'ruby-v0.62c-darwin16.5'
     build(a.out, a.kernel, a.ramdisk, a.cmdline, a.kernel_version, a.pack_base, apple_splash=a.apple_splash, darwin=a.darwin, image_name=a.image_name)

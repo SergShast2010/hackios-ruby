@@ -1666,6 +1666,11 @@ mt6877_mali_selftests(void)
 	return true;
 }
 
+extern void HakiosMaliStart(void);
+extern uint32_t gMaliServiceStarted;
+extern uint32_t gMaliClients, gMaliBuffers, gMaliSubmits, gMaliFailed, gMaliShown;
+extern uint64_t gMaliLiveMade, gMaliLiveSurfaces, gMaliLiveLate;
+
 /* =========================================================================
  * Persistent sysctl kern.hakios.mali & driver entry point
  * ========================================================================= */
@@ -1692,7 +1697,8 @@ sysctl_hakios_mali(__unused struct sysctl_oid *oidp, __unused void *arg1,
 	    "mali ready: l2=0x%x tiler=0x%x shader=0x%x (present=0x%x)\n"
 	    "irq: gpu=%u(ok=%u cnt=%llu sp=%llu test=%u) mmu=%u(ok=%u cnt=%llu sp=%llu) job=%u(ok=%u cnt=%llu sp=%llu)\n"
 	    "selftest: id=%s(0x%08x/raw=0x%x/js=0x%x/flt=0x%x) mmu=%s(0x%08x/raw=0x%x/js=0x%x/flt=0x%x) api=%s(0x%08x/va=0x%llx/seq=%llu)\n"
-	    "queue: submits=%llu failed=%llu done=%llu granules=%llu pt_top=0x%llx",
+	    "queue: submits=%llu failed=%llu done=%llu granules=%llu pt_top=0x%llx\n"
+	    "iokit: started=%u clients=%u bufs=%u submits=%u shown=%u live_bo=%llu live_surf=%llu live_late=%llu",
 	    g_mali.stage, g_mali.state, g_mali.target_mhz,
 	    g_mali.pmif_done, g_mali.hwcid, g_mali.swcid, vsram_uv, vgpu_uv,
 	    g_mali.xpu_b, g_mali.xpu2_b, g_mali.xpu_a, g_mali.xpu2_a,
@@ -1717,7 +1723,10 @@ sysctl_hakios_mali(__unused struct sysctl_oid *oidp, __unused void *arg1,
 	    (unsigned long long)g_mali.st_api_va, (unsigned long long)g_mali.st_api_seq,
 	    (unsigned long long)g_mali.submits_total, (unsigned long long)g_mali.submits_failed,
 	    (unsigned long long)mali_done_seq, (unsigned long long)gpu_granules_taken,
-	    (unsigned long long)pt_top_phys);
+	    (unsigned long long)pt_top_phys,
+	    gMaliServiceStarted, gMaliClients, gMaliBuffers, gMaliSubmits, gMaliShown,
+	    (unsigned long long)gMaliLiveMade, (unsigned long long)gMaliLiveSurfaces,
+	    (unsigned long long)gMaliLiveLate);
 	if (n < 0) n = 0;
 	if ((size_t)n >= sizeof(buf)) n = (int)sizeof(buf) - 1;
 	return SYSCTL_OUT(req, buf, (size_t)n + 1);
@@ -1754,7 +1763,13 @@ mtk_mali_thread(__unused void *arg, __unused wait_result_t wr)
 		goto done;
 	}
 
-	printf("mtk_mali: STAGE 6 OK! Mali-G68 0x%08x (v%u r%up%u) %uMHz VA=%u(%ulvl) irq(gpu=%llu mmu=%llu job=%llu)\n",
+	HakiosMaliStart();
+	if (gMaliServiceStarted) {
+		g_mali.stage = 7;
+		g_mali.state = "iokit_ready";
+	}
+
+	printf("mtk_mali: STAGE 7 OK! Mali-G68 0x%08x (v%u r%up%u) %uMHz VA=%u(%ulvl) irq(gpu=%llu mmu=%llu job=%llu)\n",
 	    g_mali.gpu_id, (g_mali.gpu_id >> 28) & 0xFu,
 	    (g_mali.gpu_id >> 12) & 0xFu, (g_mali.gpu_id >> 4) & 0xFFu,
 	    g_mali.target_mhz, g_mali.va_bits, g_mali.pt_levels,

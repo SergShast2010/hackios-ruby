@@ -1,5 +1,5 @@
 diff --git a/userland/build.sh b/userland/build.sh
-index c604123..a051f61 100755
+index c604123..404f042 100755
 --- a/userland/build.sh
 +++ b/userland/build.sh
 @@ -109,7 +109,7 @@ DARWIN_JOBS=${JOBS-"
@@ -11,16 +11,17 @@ index c604123..a051f61 100755
  	com.apple.iconservices.iconservicesagent com.apple.pluginkit.pkd
  	com.apple.SpringBoard
  "}
-@@ -168,6 +168,8 @@ cp obj/child root/bin/child
+@@ -168,6 +168,9 @@ cp obj/child root/bin/child
  # ends: the program and its job together, away from the Darwin job list below, which several working
  # copies are editing at once.
  [ -f obj/var_store ] && cp obj/var_store root/bin/
 +[ -f obj/rwtouch ] && cp obj/rwtouch root/bin/
 +[ -f obj/ruby_ctld ] && cp obj/ruby_ctld root/bin/
++[ -f obj/mali_test ] && cp obj/mali_test root/bin/
  cp com.hakios.varstore.plist root/LaunchDaemons/
  echo "Darwin on hakios: image built $(date '+%Y-%m-%d %H:%M')" > root/etc/motd
  # 300000 bytes, byte i = (i*31 + (i>>8)) & 0xff; init verifies it through read() and mmap()
-@@ -582,7 +584,7 @@ python3 ../tools/apfs/mkapfs.py -z --plain fw -o root.apfs redwood=root | tail -
+@@ -582,7 +585,7 @@ python3 ../tools/apfs/mkapfs.py -z --plain fw -o root.apfs redwood=root | tail -
  # CRYPTEXES=flash: the boot volume alone (20 MB) -- the cryptexes are Apple's images as they are on the
  # flash, in darwin right after the Darwin volume (../tools/darwin-write.py put them there), and init mounts
  # them from there, the same containers 1 and 2 of the root's own device.
@@ -29,7 +30,7 @@ index c604123..a051f61 100755
  	rm -rf flashboot flashboot.os
  	mkdir -p flashboot/sbin flashboot/redwood flashboot/dev flashboot/flash flashboot/Cryptexes/OS flashboot/Cryptexes/App
  	cp obj/stage0 flashboot/sbin/launchd
-@@ -614,7 +616,13 @@ if [ -n "$FLASHBOOT" ] && [ -f $CACHE/dyld_shared_cache_arm64 ]; then
+@@ -614,7 +617,13 @@ if [ -n "$FLASHBOOT" ] && [ -f $CACHE/dyld_shared_cache_arm64 ]; then
  	# the package manager's prefix, when tools/mk-jb.sh has fetched one: /jb of the boot volume, which is
  	# /private/preboot/jb once the Darwin volume is the root -- the volume where a rootless jailbreak keeps its
  	# Procursus on an iPhone as well; init grafts it onto /var/jb (src/init.c, mount_writable)
@@ -44,7 +45,7 @@ index c604123..a051f61 100755
  		cp -a ../jb/root/var/jb flashboot/jb
  		mkdir -p flashboot/jb-rw        # where init mounts the prefix's writable copy (src/init.c)
  		# and what Sileo runs from /bin, for init to put over the Darwin volume's /bin (see the system image below)
-@@ -624,7 +632,7 @@ if [ -n "$FLASHBOOT" ] && [ -f $CACHE/dyld_shared_cache_arm64 ]; then
+@@ -624,7 +633,7 @@ if [ -n "$FLASHBOOT" ] && [ -f $CACHE/dyld_shared_cache_arm64 ]; then
  		done
  		echo "  the package manager's prefix: $(du -sh flashboot/jb | cut -f1) as /jb of the boot volume"
  	fi

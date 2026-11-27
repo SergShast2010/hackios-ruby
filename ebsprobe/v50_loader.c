@@ -888,11 +888,11 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
 
 #ifdef V50_DARWIN
     if (hello_ok && !real_panic) {
-        ui_line(ctx, 0, "RUBY v0.62b: DARWIN 16.5 NBD RETURNED", COL_GREEN);
+        ui_line(ctx, 0, "RUBY v0.62c: DARWIN 16.5 NBD RETURNED", COL_GREEN);
     } else if (real_panic) {
-        ui_line(ctx, 0, "RUBY v0.62b: DARWIN PANIC (SEE LOG)", COL_RED);
+        ui_line(ctx, 0, "RUBY v0.62c: DARWIN PANIC (SEE LOG)", COL_RED);
     } else {
-        ui_line(ctx, 0, "RUBY v0.62b: DARWIN RETURNED (SEE LOG)", COL_YELLOW);
+        ui_line(ctx, 0, "RUBY v0.62c: DARWIN RETURNED (SEE LOG)", COL_YELLOW);
     }
 #else
     if (hello_ok && !real_panic) {
@@ -1155,7 +1155,7 @@ __attribute__((noinline, noreturn)) void V50OnException(
     g_con = NULL;
     fb_clear(ctx);
 #ifdef V50_DARWIN
-    ui_line(ctx, 0, "RUBY v0.62b: EARLY LOADER EXCEPTION", COL_RED);
+    ui_line(ctx, 0, "RUBY v0.62c: EARLY LOADER EXCEPTION", COL_RED);
 #else
     ui_line(ctx, 0, "RUBY v0.56b: EARLY LOADER EXCEPTION", COL_RED);
 #endif
@@ -1328,7 +1328,7 @@ efi_status EFIAPI efi_main(efi_handle image, efi_system_table *st) {
     fb_clear(&ctx);
 #endif
 #ifdef V50_DARWIN
-    ui_line(&ctx, 0, "ruby v0.62b - HakiOS iOS 16.5 (Darwin 22.5) NBD", COL_GREEN);
+    ui_line(&ctx, 0, "ruby v0.62c - HakiOS iOS 16.5 (Darwin 22.5) NBD", COL_GREEN);
 #else
     ui_line(&ctx, 0, "ruby v0.56 - HakiOS 4 GiB + 8C + USB ECM + NBD APFS", COL_GREEN);
 #endif
