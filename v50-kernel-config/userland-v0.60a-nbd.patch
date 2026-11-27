@@ -54,6 +54,19 @@ index c604123..404f042 100755
  	[ -z "$CHECK" ] || ../tools/apfs/check-image.sh flashboot.boot.apfs Boot=flashboot
  	# the third container: Apple's App cryptex as it is (10 MB; unpack.sh), for the boot volume's Cryptexes/App
  	APP=""
+diff --git a/userland/src/gl_test.c b/userland/src/gl_test.c
+index 7ce7dc1..5377e3b 100644
+--- a/userland/src/gl_test.c
++++ b/userland/src/gl_test.c
+@@ -350,6 +350,8 @@ main(int argc, char **argv)
+ 	    (unsigned)(width * height), (unsigned)((uint64_t)coloured * 100 / (uint64_t)(width * height)));
+ 
+ 	service = IOServiceGetMatchingService(0, IOServiceMatching("HakiosGPU"));
++	if (service == 0)
++		service = IOServiceGetMatchingService(0, IOServiceMatching("HakiosMali"));
+ 	if (service == 0 || IOServiceOpen(service, mach_task_self(), 0, &connection) != 0) {
+ 		printf("gl_test: no GPU service in this kernel to put the picture on the panel with\n");
+ 		return 0;
 diff --git a/userland/src/init.c b/userland/src/init.c
 index 6801ce2..a4a29ef 100644
 --- a/userland/src/init.c
