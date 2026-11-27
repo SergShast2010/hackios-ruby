@@ -820,7 +820,7 @@ __attribute__((noinline, noreturn)) void V50BootPhysical(struct v50_ctx *ctx) {
     if (ctx->is_qemu) {
         append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "serial=3 virtio_input=1 virtio_net=1 nbd=1 root_apfs=nbd0 var_hfs=nbd2 sb_delay=12 ui_lite=0 fb_threads=4 fb_ca_hz=120");
     } else {
-        append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "buttons=2 touchscreen=2 touchlog=1 mtk_ufs_ro=1 mtk_usb_ecm=1 nbd=1 root_apfs=nbd0 var_hfs=nbd2 sb_delay=12 ui_lite=0 fb_threads=4 fb_ca_hz=120");
+        append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, "buttons=2 touchscreen=2 touchlog=1 mtk_ufs_ro=1 mtk_usb_ecm=1 nbd=1 root_apfs=nbd0 var_hfs=nbd2 sb_delay=12 ui_lite=0 fb_threads=4 fb_ca_hz=120 mali=1");
     }
 #ifdef V50_APPLE_SPLASH
     append_str(ba->commandLine, &cl, BOOT_LINE_LENGTH, " boot_splash=1");
@@ -888,11 +888,11 @@ __attribute__((noinline, noreturn)) void V50OnXnuReturn(
 
 #ifdef V50_DARWIN
     if (hello_ok && !real_panic) {
-        ui_line(ctx, 0, "RUBY v0.61: DARWIN 16.5 NBD RETURNED", COL_GREEN);
+        ui_line(ctx, 0, "RUBY v0.62a: DARWIN 16.5 NBD RETURNED", COL_GREEN);
     } else if (real_panic) {
-        ui_line(ctx, 0, "RUBY v0.61: DARWIN PANIC (SEE LOG)", COL_RED);
+        ui_line(ctx, 0, "RUBY v0.62a: DARWIN PANIC (SEE LOG)", COL_RED);
     } else {
-        ui_line(ctx, 0, "RUBY v0.61: DARWIN RETURNED (SEE LOG)", COL_YELLOW);
+        ui_line(ctx, 0, "RUBY v0.62a: DARWIN RETURNED (SEE LOG)", COL_YELLOW);
     }
 #else
     if (hello_ok && !real_panic) {
@@ -1155,7 +1155,7 @@ __attribute__((noinline, noreturn)) void V50OnException(
     g_con = NULL;
     fb_clear(ctx);
 #ifdef V50_DARWIN
-    ui_line(ctx, 0, "RUBY v0.61: EARLY LOADER EXCEPTION", COL_RED);
+    ui_line(ctx, 0, "RUBY v0.62a: EARLY LOADER EXCEPTION", COL_RED);
 #else
     ui_line(ctx, 0, "RUBY v0.56b: EARLY LOADER EXCEPTION", COL_RED);
 #endif
@@ -1328,7 +1328,7 @@ efi_status EFIAPI efi_main(efi_handle image, efi_system_table *st) {
     fb_clear(&ctx);
 #endif
 #ifdef V50_DARWIN
-    ui_line(&ctx, 0, "ruby v0.61 - HakiOS iOS 16.5 (Darwin 22.5) NBD", COL_GREEN);
+    ui_line(&ctx, 0, "ruby v0.62a - HakiOS iOS 16.5 (Darwin 22.5) NBD", COL_GREEN);
 #else
     ui_line(&ctx, 0, "ruby v0.56 - HakiOS 4 GiB + 8C + USB ECM + NBD APFS", COL_GREEN);
 #endif
