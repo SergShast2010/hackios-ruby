@@ -373,7 +373,7 @@ static struct {
 	uint64_t last_fail_walk[4];
 } g_mali = {
 	.state = "not_started",
-	.target_mhz = 450,
+	.target_mhz = 800,
 	.fastmap = 1,
 	.walk_wb = 0,
 	.want_irq = 1,
@@ -663,19 +663,16 @@ infra_clear_bus_prot(uint32_t clr_reg, uint32_t sta_reg, uint32_t mask)
 static uint32_t
 mt6877_freq_to_con1(uint32_t mhz)
 {
-	/* Clamp to safe range [300..850] MHz; Stage 1/2 default is 450 MHz */
-	if (mhz < 300u) mhz = 300u;
-	if (mhz > 850u) mhz = 850u;
+	/*
+	 * MT6877 OPP table (mtk_gpufreq_internal_plat.h):
+	 * At VSRAM=0.75V, VGPU=0.75V all segments support up to 890 MHz sign-off
+	 * with POSDIV_POWER_4 (/4, VCO 1540..3560 MHz). Default is 800 MHz.
+	 */
+	if (mhz < 385u) mhz = 385u;
+	if (mhz > 890u) mhz = 890u;
 
-	uint32_t posdiv_bits;
-	uint32_t posdiv_mul;
-	if (mhz >= 750u) {
-		posdiv_bits = 1u; /* /2 -> VCO 1500..1700 MHz */
-		posdiv_mul  = 2u;
-	} else {
-		posdiv_bits = 2u; /* /4 -> VCO 1200..3000 MHz */
-		posdiv_mul  = 4u;
-	}
+	uint32_t posdiv_bits = 2u; /* POSDIV_POWER_4 (/4) */
+	uint32_t posdiv_mul  = 4u;
 	/* pcw (22-bit: 8 int + 14 frac) = (mhz * posdiv_mul * 16384) / 26 */
 	uint64_t num = (uint64_t)mhz * (uint64_t)posdiv_mul * 16384ULL + 13ULL;
 	uint32_t pcw = (uint32_t)(num / 26ULL) & 0x3FFFFFu;

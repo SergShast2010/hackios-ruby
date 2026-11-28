@@ -218,6 +218,44 @@ index 6801ce2..a4a29ef 100644
  		}
  		execve(argv[1], argv + 1, envp);
  		printf("%s: %s\n", argv[1], strerror(errno));
+diff --git a/userland/src/inject.c b/userland/src/inject.c
+index 217e8fa..0420ce8 100644
+--- a/userland/src/inject.c
++++ b/userland/src/inject.c
+@@ -1059,6 +1059,9 @@ opengl_es(void)
+ 	}
+ 	if (wanted < 0) {
+ 		gpu = IOServiceGetMatchingService(0, IOServiceMatching("HakiosGPU"));
++		if (gpu == 0) {
++			gpu = IOServiceGetMatchingService(0, IOServiceMatching("HakiosMali"));
++		}
+ 		wanted = gpu != 0;
+ 		if (gpu != 0) {
+ 			IOObjectRelease(gpu);
+diff --git a/userland/src/inject_sb.c b/userland/src/inject_sb.c
+index f847feb..1d99c7d 100644
+--- a/userland/src/inject_sb.c
++++ b/userland/src/inject_sb.c
+@@ -750,6 +750,9 @@ gpu_draws(void)
+ 		for (argument = arguments; (argument = strstr(argument, "metal=")) != NULL; argument += 6) {
+ 			if ((argument == arguments || argument[-1] == ' ') && argument[6] != '0') {
+ 				gpu = IOServiceGetMatchingService(0, IOServiceMatching("HakiosGPU"));
++				if (gpu == 0) {
++					gpu = IOServiceGetMatchingService(0, IOServiceMatching("HakiosMali"));
++				}
+ 				if (gpu != 0) {
+ 					IOObjectRelease(gpu);
+ 					return true;
+@@ -769,6 +772,9 @@ gpu_draws(void)
+ 		}
+ 	}
+ 	gpu = IOServiceGetMatchingService(0, IOServiceMatching("HakiosGPU"));
++	if (gpu == 0) {
++		gpu = IOServiceGetMatchingService(0, IOServiceMatching("HakiosMali"));
++	}
+ 	if (gpu != 0) {
+ 		IOObjectRelease(gpu);
+ 	}
 diff --git a/userland/src/stage0.c b/userland/src/stage0.c
 index 3f04cc9..4e2af38 100644
 --- a/userland/src/stage0.c
